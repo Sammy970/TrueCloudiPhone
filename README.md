@@ -17,7 +17,7 @@ TrueCloud built into the open-source Moonlight client: one app, automatic pairin
   <img src="https://img.shields.io/badge/unofficial-not%20affiliated%20with%20TrueCloud-B42318?style=flat-square" alt="Unofficial">
 </p>
 
-<p><a href="#a-whole-session-on-one-screen"><b>Screenshots</b></a> &nbsp;·&nbsp; <a href="#what-it-does">What it does</a> &nbsp;·&nbsp; <a href="#glass-on-screen-controls-placed-where-you-want-them">Controls</a> &nbsp;·&nbsp; <a href="#build-and-install">Build and install</a> &nbsp;·&nbsp; <a href="#how-it-works">How it works</a> &nbsp;·&nbsp; <a href="#made-by">Made by</a></p>
+<p><a href="#install-with-sidestore-no-xcode-needed"><b>Install</b></a> &nbsp;·&nbsp; <a href="#a-whole-session-on-one-screen">Screenshots</a> &nbsp;·&nbsp; <a href="#what-it-does">What it does</a> &nbsp;·&nbsp; <a href="#glass-on-screen-controls-placed-where-you-want-them">Controls</a> &nbsp;·&nbsp; <a href="#build-and-install">Build and install</a> &nbsp;·&nbsp; <a href="#how-it-works">How it works</a> &nbsp;·&nbsp; <a href="#made-by">Made by</a></p>
 
 </div>
 
@@ -144,9 +144,21 @@ No controller handy? The on-screen gamepad is drawn as glass, and you decide whe
   <br><sub>Pressed controls light up in teal.</sub>
 </p>
 
+## Install with SideStore (no Xcode needed)
+
+**[Download TrueCloud-0.1.0.ipa](https://github.com/Sammy970/TrueCloudiPhone/releases/latest)**: unsigned, so it
+contains nothing personal, and you sign it with your own Apple ID.
+
+1. Set up [SideStore](https://sidestore.io) on your iPhone (a one-time setup with a computer; their guide walks you
+   through it). [AltStore](https://altstore.io) and [Sideloadly](https://sideloadly.io) work too.
+2. Download the IPA on your iPhone, then in SideStore go to **My Apps → +** and pick it.
+3. SideStore signs it with your Apple ID and installs it. It re-signs it every 7 days in the background, so it keeps
+   working. On a free Apple ID it uses one of your three app slots.
+
 ## Build and install
 
-You need a Mac with Xcode, an Apple ID, and a checkout of [Moonlight for iOS](https://github.com/moonlight-stream/moonlight-ios).
+Or build it yourself and install it from your Mac. 
+Needs a Mac with Xcode, an Apple ID, and a checkout of [Moonlight for iOS](https://github.com/moonlight-stream/moonlight-ios).
 
 ```sh
 git clone --recurse-submodules https://github.com/moonlight-stream/moonlight-ios   # into ./moonlight-ios
