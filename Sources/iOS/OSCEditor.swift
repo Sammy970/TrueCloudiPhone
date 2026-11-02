@@ -354,11 +354,13 @@ final class OSCEditorViewController: UIViewController {
         sceneButton.addAction(UIAction { [weak self] _ in self?.toggleScene() }, for: .touchUpInside)
         sceneButton.accessibilityLabel = "Switch the background between night and day"
         sceneButton.translatesAutoresizingMaskIntoConstraints = false
-        if preview != .playing { view.addSubview(sceneButton) }
-        NSLayoutConstraint.activate([
-            sceneButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
-            sceneButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -14),
-        ])
+        if preview != .playing {
+            view.addSubview(sceneButton)
+            NSLayoutConstraint.activate([
+                sceneButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
+                sceneButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -14),
+            ])
+        }
     }
 
     override func viewDidLayoutSubviews() {

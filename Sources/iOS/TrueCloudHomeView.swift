@@ -389,6 +389,8 @@ struct TrueCloudHomeView: View {
         if value.contains(":controllers") { showingControllers = true }
         // `:settings` opens Stream settings; `:roundtrip` then opens the controls editor and closes it again.
         if value.contains(":settings") { showingSettings = true }
+        if value.hasSuffix(":network") { showingNetwork = true }
+        if value.contains(":about") { showingAbout = true }
         if value.contains(":roundtrip") {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))

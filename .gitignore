@@ -5,7 +5,6 @@ build/
 dist/
 DerivedData/
 .swiftpm/
-Screenshots/raw/
 
 *.app
 *.ipa
