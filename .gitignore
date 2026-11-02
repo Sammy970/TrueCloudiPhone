@@ -1,0 +1,19 @@
+# Moonlight checkout (its own git repo; integrate-moonlight.rb patches it)
+moonlight-ios/
+.build/
+build/
+dist/
+DerivedData/
+.swiftpm/
+Screenshots/raw/
+
+*.app
+*.ipa
+*.dSYM
+.DS_Store
+
+# Secrets / local signing
+*.mobileprovision
+*.p12
+*.cer
+scripts/renew.env

@@ -1,0 +1,441 @@
+diff --git a/Limelight/AppDelegate.m b/Limelight/AppDelegate.m
+index 5db73f5..f06a90b 100644
+--- a/Limelight/AppDelegate.m
++++ b/Limelight/AppDelegate.m
+@@ -7,6 +7,37 @@
+ //
+ 
+ #import "AppDelegate.h"
++#import <objc/message.h>
++
++// TrueCloud: iOS 27 refuses to launch apps built with its SDK that don't use the UIScene life cycle. UIKit still
++// builds the window from the storyboard named in Info.plist (UISceneStoryboardFile); this delegate is what scene
++// apps use to receive the home-screen shortcuts that the app delegate used to get.
++@interface TrueCloudSceneDelegate : UIResponder <UIWindowSceneDelegate>
++@property (strong, nonatomic) UIWindow *window;
++@end
++
++@implementation TrueCloudSceneDelegate
++
++#if !TARGET_OS_TV
++- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
++    UIApplicationShortcutItem* shortcut = connectionOptions.shortcutItem;
++    if (shortcut != nil) {
++        ((AppDelegate*)UIApplication.sharedApplication.delegate).pcUuidToLoad = (NSString*)[shortcut.userInfo objectForKey:@"UUID"];
++    }
++}
++
++- (void)windowScene:(UIWindowScene *)windowScene performActionForShortcutItem:(UIApplicationShortcutItem *)shortcutItem completionHandler:(void (^)(BOOL succeeded))completionHandler {
++    AppDelegate* app = (AppDelegate*)UIApplication.sharedApplication.delegate;
++    app.pcUuidToLoad = (NSString*)[shortcutItem.userInfo objectForKey:@"UUID"];
++    app.shortcutCompletionHandler = completionHandler;
++}
++#endif
++
++- (void)sceneDidEnterBackground:(UIScene *)scene {
++    [(AppDelegate*)UIApplication.sharedApplication.delegate saveContext];
++}
++
++@end
+ 
+ @implementation AppDelegate
+ 
+@@ -22,6 +53,12 @@ @implementation AppDelegate
+ static NSString* DB_NAME = @"Limelight_iOS.sqlite";
+ #endif
+ 
++// TrueCloud: the TrueCloud panel is portrait; Moonlight itself stays landscape.
++- (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window {
++    NSNumber* mask = ((NSNumber* (*)(id, SEL))objc_msgSend)(NSClassFromString(@"TrueCloudPanel"), NSSelectorFromString(@"orientationMask"));
++    return mask != nil ? mask.unsignedIntegerValue : UIInterfaceOrientationMaskLandscape;
++}
++
+ - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+ #if !TARGET_OS_TV
+     UIApplicationShortcutItem* shortcut = [launchOptions valueForKey:UIApplicationLaunchOptionsShortcutItemKey];
+diff --git a/Limelight/Input/StreamView.m b/Limelight/Input/StreamView.m
+index 7dedeb3..1d832c4 100644
+--- a/Limelight/Input/StreamView.m
++++ b/Limelight/Input/StreamView.m
+@@ -74,7 +74,10 @@ - (void) setupStreamView:(ControllerSupport*)controllerSupport
+         self->touchHandler = [[RelativeTouchHandler alloc] initWithView:self];
+     }
+     
+-    onScreenControls = [[OnScreenControls alloc] initWithView:self controllerSup:controllerSupport streamConfig:streamConfig];
++    // TrueCloud: the glass on-screen controls (TrueCloudOnScreenControls, in the TrueCloud panel's Swift code) take the
++    // place of Moonlight's own; they answer the same messages. Falls back to Moonlight's if they're missing.
++    Class oscClass = NSClassFromString(@"TrueCloudOnScreenControls") ?: [OnScreenControls class];
++    onScreenControls = [[oscClass alloc] initWithView:self controllerSup:controllerSupport streamConfig:streamConfig];
+     OnScreenControlsLevel level = (OnScreenControlsLevel)[settings.onscreenControls integerValue];
+     if (settings.absoluteTouchMode) {
+         Log(LOG_I, @"On-screen controls disabled in absolute touch mode");
+diff --git a/Limelight/Limelight-Info.plist b/Limelight/Limelight-Info.plist
+index 963c433..4167d08 100644
+--- a/Limelight/Limelight-Info.plist
++++ b/Limelight/Limelight-Info.plist
+@@ -9,7 +9,7 @@
+ 	<key>CFBundleDevelopmentRegion</key>
+ 	<string>en</string>
+ 	<key>CFBundleDisplayName</key>
+-	<string>${PRODUCT_NAME}</string>
++	<string>TrueCloud</string>
+ 	<key>CFBundleExecutable</key>
+ 	<string>${EXECUTABLE_NAME}</string>
+ 	<key>CFBundleIdentifier</key>
+@@ -35,14 +35,14 @@
+ 	</array>
+ 	<key>GCSupportsControllerUserInteraction</key>
+ 	<true/>
+-	<key>LSSupportsGameMode</key>
+-	<true/>
+ 	<key>ITSAppUsesNonExemptEncryption</key>
+ 	<false/>
+ 	<key>LSApplicationCategoryType</key>
+ 	<string>public.app-category.games</string>
+ 	<key>LSRequiresIPhoneOS</key>
+ 	<true/>
++	<key>LSSupportsGameMode</key>
++	<true/>
+ 	<key>NSAppTransportSecurity</key>
+ 	<dict>
+ 		<key>NSAllowsArbitraryLoads</key>
+@@ -60,12 +60,34 @@
+ 	<string>Moonlight uses the local network to connect to your gaming PC for streaming.</string>
+ 	<key>UIApplicationSupportsIndirectInputEvents</key>
+ 	<true/>
+-	<key>UILaunchStoryboardName</key>
+-	<string>Launch Screen</string>
+-	<key>UIMainStoryboardFile</key>
+-	<string>iPhone</string>
+-	<key>UIMainStoryboardFile~ipad</key>
+-	<string>iPad</string>
++	<key>UILaunchScreen</key>
++	<dict>
++		<key>UIColorName</key>
++		<string>TrueCloudLaunchBackground</string>
++		<key>UIImageName</key>
++		<string>TrueCloudLaunchLogo</string>
++	</dict>
++	<key>UIApplicationSceneManifest</key>
++	<dict>
++		<key>UIApplicationSupportsMultipleScenes</key>
++		<false/>
++		<key>UISceneConfigurations</key>
++		<dict>
++			<key>UIWindowSceneSessionRoleApplication</key>
++			<array>
++				<dict>
++					<key>UISceneConfigurationName</key>
++					<string>Default Configuration</string>
++					<key>UISceneDelegateClassName</key>
++					<string>TrueCloudSceneDelegate</string>
++					<key>UISceneStoryboardFile</key>
++					<string>iPhone</string>
++					<key>UISceneStoryboardFile~ipad</key>
++					<string>iPad</string>
++				</dict>
++			</array>
++		</dict>
++	</dict>
+ 	<key>UIRequiredDeviceCapabilities</key>
+ 	<array>
+ 		<string>armv7</string>
+@@ -76,6 +98,7 @@
+ 	<true/>
+ 	<key>UISupportedInterfaceOrientations</key>
+ 	<array>
++		<string>UIInterfaceOrientationPortrait</string>
+ 		<string>UIInterfaceOrientationLandscapeLeft</string>
+ 		<string>UIInterfaceOrientationLandscapeRight</string>
+ 	</array>
+@@ -83,6 +106,7 @@
+ 	<array>
+ 		<string>UIInterfaceOrientationLandscapeLeft</string>
+ 		<string>UIInterfaceOrientationLandscapeRight</string>
++		<string>UIInterfaceOrientationPortrait</string>
+ 	</array>
+ 	<key>UIViewControllerBasedStatusBarAppearance</key>
+ 	<false/>
+diff --git a/Limelight/ViewControllers/MainFrameViewController.m b/Limelight/ViewControllers/MainFrameViewController.m
+index 169bb13..4ff0a61 100644
+--- a/Limelight/ViewControllers/MainFrameViewController.m
++++ b/Limelight/ViewControllers/MainFrameViewController.m
+@@ -34,6 +34,7 @@
+ #endif
+ 
+ #import <VideoToolbox/VideoToolbox.h>
++#import <objc/message.h>
+ 
+ #include <Limelight.h>
+ 
+@@ -53,6 +54,10 @@ @implementation MainFrameViewController {
+     NSArray* _sortedAppList;
+     NSCache* _boxArtCache;
+     bool _background;
++    // TrueCloud: address of the cloud PC to auto-launch "Desktop" on once its app list loads.
++    NSString* _trueCloudLaunchAddress;
++    BOOL _trueCloudShownOnLaunch;
++    UIView* _trueCloudCover;
+ #if TARGET_OS_TV
+     UITapGestureRecognizer* _menuRecognizer;
+ #endif
+@@ -63,8 +68,11 @@ - (void)startPairing:(NSString *)PIN {
+     // Needs to be synchronous to ensure the alert is shown before any potential
+     // failure callback could be invoked.
+     dispatch_sync(dispatch_get_main_queue(), ^{
++        NSString* message = self->_trueCloudLaunchAddress != nil
++            ? @"Pairing with your TrueCloud PC. The PIN is entered for you — this takes a few seconds."
++            : [NSString stringWithFormat:@"Enter the following PIN on the host machine: %@\n\nIf your host PC is running Sunshine, navigate to the Sunshine web UI to enter the PIN.", PIN];
+         self->_pairAlert = [UIAlertController alertControllerWithTitle:@"Pairing"
+-                                                               message:[NSString stringWithFormat:@"Enter the following PIN on the host machine: %@\n\nIf your host PC is running Sunshine, navigate to the Sunshine web UI to enter the PIN.", PIN]
++                                                               message:message
+                                                         preferredStyle:UIAlertControllerStyleAlert];
+         [self->_pairAlert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
+             self->_pairAlert = nil;
+@@ -74,6 +82,9 @@ - (void)startPairing:(NSString *)PIN {
+             }];
+         }]];
+         [[self activeViewController] presentViewController:self->_pairAlert animated:YES completion:nil];
++
++        // TrueCloud: the TrueCloud session submits this PIN to the backend, which enters it into Sunshine.
++        [[NSNotificationCenter defaultCenter] postNotificationName:@"TrueCloudPairingPIN" object:nil userInfo:@{@"pin": PIN}];
+     });
+ }
+ 
+@@ -94,6 +105,7 @@ - (void)displayPairingFailureDialog:(NSString *)message {
+ 
+ - (void)pairFailed:(NSString *)message {
+     dispatch_async(dispatch_get_main_queue(), ^{
++        [[NSNotificationCenter defaultCenter] postNotificationName:@"TrueCloudPairingEnded" object:nil];
+         if (self->_pairAlert != nil) {
+             [self->_pairAlert dismissViewControllerAnimated:YES completion:^{
+                 [self displayPairingFailureDialog:message];
+@@ -105,6 +117,7 @@ - (void)pairFailed:(NSString *)message {
+ 
+ - (void)pairSuccessful:(NSData*)serverCert {
+     dispatch_async(dispatch_get_main_queue(), ^{
++        [[NSNotificationCenter defaultCenter] postNotificationName:@"TrueCloudPairingEnded" object:nil];
+         // Store the cert from pairing with the host
+         self->_selectedHost.serverCert = serverCert;
+         
+@@ -938,6 +951,15 @@ - (void)viewDidLoad
+     
+     // Get callbacks associated with the viewController
+     [self.revealViewController setDelegate:self];
++
++    // TrueCloud: button to reopen the TrueCloud panel, and the hook it uses to connect.
++    UIBarButtonItem* trueCloudButton = [[UIBarButtonItem alloc] initWithTitle:@"TrueCloud"
++                                                                       style:UIBarButtonItemStylePlain
++                                                                      target:self
++                                                                      action:@selector(showTrueCloud)];
++    NSMutableArray* rightItems = [self.navigationItem.rightBarButtonItems mutableCopy] ?: [NSMutableArray array];
++    [rightItems addObject:trueCloudButton];
++    self.navigationItem.rightBarButtonItems = rightItems;
+     
+     // Disable bounce-back on reveal VC otherwise the settings will snap closed
+     // if the user drags all the way off the screen opposite the settings pane.
+@@ -1109,7 +1131,28 @@ - (void)viewDidAppear:(BOOL)animated
+     
+     // Check for a pending shortcut action when appearing
+     [self handlePendingShortcutAction];
+-    
++
++#if !TARGET_OS_TV
++    // TrueCloud: open straight into the TrueCloud panel on launch. When the panel closes after
++    // Play, it leaves the cloud PC's address for us (a notification would be lost, since
++    // viewDidDisappear removes all of our observers while the panel covers us).
++    if (!_trueCloudShownOnLaunch) {
++        _trueCloudShownOnLaunch = YES;
++        [self showTrueCloudAnimated:NO];
++    } else {
++        NSString* pending = ((NSString* (*)(id, SEL))objc_msgSend)(NSClassFromString(@"TrueCloudPanel"), NSSelectorFromString(@"takePendingConnectAddress"));
++        if (pending != nil) {
++            [self trueCloudConnectToAddress:pending];
++        } else if (_trueCloudLaunchAddress == nil) {
++            // Back from a stream: TrueCloud is the app's home, Moonlight only runs the connection.
++            [self trueCloudShowCover:nil];
++            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
++                [self showTrueCloudAnimated:YES];
++            });
++        }
++    }
++#endif
++
+     [[NSNotificationCenter defaultCenter] addObserver: self
+                                              selector: @selector(handleReturnToForeground)
+                                                  name: UIApplicationDidBecomeActiveNotification
+@@ -1124,6 +1167,12 @@ - (void)viewDidAppear:(BOOL)animated
+ - (void)viewWillAppear:(BOOL)animated
+ {
+     [super viewWillAppear:animated];
++#if !TARGET_OS_TV
++    // TrueCloud: hide Moonlight behind the launch colour until the panel is presented in viewDidAppear.
++    if (!_trueCloudShownOnLaunch) {
++        [self trueCloudShowCover:nil];
++    }
++#endif
+     
+     // We can get here on home press while streaming
+     // since the stream view segues to us just before
+@@ -1142,6 +1191,10 @@ - (void)viewWillAppear:(BOOL)animated
+ - (void)viewDidDisappear:(BOOL)animated
+ {
+     [super viewDidDisappear:animated];
++#if !TARGET_OS_TV
++    // TrueCloud: the stream (or the panel) now covers us.
++    [self trueCloudHideCover];
++#endif
+     
+     // when discovery stops, we must create a new instance because
+     // you cannot restart an NSOperation when it is finished
+@@ -1341,6 +1394,150 @@ - (void) updateAppsForHost:(TemporaryHost*)host {
+     
+     [hostScrollView removeFromSuperview];
+     [self.collectionView reloadData];
++
++    // TrueCloud: once the cloud PC's apps are known, start "Desktop" (after the loading frame is gone).
++    if (_trueCloudLaunchAddress != nil && [self trueCloudHost:host matchesAddress:_trueCloudLaunchAddress]) {
++        _trueCloudLaunchAddress = nil;
++        TemporaryApp* desktop = nil;
++        for (TemporaryApp* app in host.appList) {
++            if ([app.name caseInsensitiveCompare:@"Desktop"] == NSOrderedSame) {
++                desktop = app;
++                break;
++            }
++        }
++        if (desktop != nil) {
++            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
++                [self appClicked:desktop view:nil];
++            });
++        }
++    }
++}
++
++#pragma mark - TrueCloud
++
++- (BOOL) trueCloudHost:(TemporaryHost*)host matchesAddress:(NSString*)address {
++    return [host.address isEqualToString:address] || [host.activeAddress isEqualToString:address] ||
++           [host.localAddress isEqualToString:address] || [host.externalAddress isEqualToString:address];
++}
++
++- (void) showTrueCloud {
++    [self showTrueCloudAnimated:YES];
++}
++
++- (void) showTrueCloudAnimated:(BOOL)animated {
++    Class panel = NSClassFromString(@"TrueCloudPanel");
++    if (panel == nil) {
++        [self trueCloudHideCover];
++        return;
++    }
++    UIViewController* controller = ((UIViewController* (*)(id, SEL))objc_msgSend)(panel, NSSelectorFromString(@"makeViewController"));
++    [[self activeViewController] presentViewController:controller animated:animated completion:^{
++        [self trueCloudHideCover];
++    }];
++}
++
++// Covers Moonlight's own screens in TrueCloud's launch colour and logo: at launch until the panel
++// is up, and while a Play connects (with `text` and a spinner), so Moonlight's host list never shows.
++- (void) trueCloudShowCover:(NSString*)text {
++    [self trueCloudHideCover];
++    UIView* host = self.navigationController.view ?: self.view;
++    UIView* cover = [[UIView alloc] initWithFrame:host.bounds];
++    cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
++    cover.backgroundColor = [UIColor colorNamed:@"TrueCloudLaunchBackground"] ?: UIColor.systemBackgroundColor;
++
++    UIImageView* logo = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"TrueCloudLaunchLogo"]];
++    CGFloat side = text == nil ? 171 : 120;
++    [logo.widthAnchor constraintEqualToConstant:side].active = YES;
++    [logo.heightAnchor constraintEqualToConstant:side].active = YES;
++    UIStackView* stack = [[UIStackView alloc] initWithArrangedSubviews:@[logo]];
++    stack.axis = UILayoutConstraintAxisVertical;
++    stack.alignment = UIStackViewAlignmentCenter;
++    stack.spacing = 6;
++    if (text != nil) {
++        UIActivityIndicatorView* spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
++        [spinner startAnimating];
++        UILabel* label = [[UILabel alloc] init];
++        label.text = text;
++        label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
++        label.textColor = UIColor.labelColor;
++        [stack addArrangedSubview:label];
++        [stack addArrangedSubview:spinner];
++        [stack setCustomSpacing:14 afterView:label];
++    }
++    stack.translatesAutoresizingMaskIntoConstraints = NO;
++    [cover addSubview:stack];
++    [stack.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor].active = YES;
++    [stack.centerYAnchor constraintEqualToAnchor:cover.centerYAnchor].active = YES;
++    [host addSubview:cover];
++    _trueCloudCover = cover;
++
++    if (text != nil) {
++        // Safety net: if the connection stalls somewhere silent, uncover Moonlight after a minute
++        // (its "TrueCloud" button leads back).
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
++            if (self->_trueCloudCover == cover) {
++                [self trueCloudHideCover];
++            }
++        });
++    }
++}
++
++- (void) trueCloudHideCover {
++    [_trueCloudCover removeFromSuperview];
++    _trueCloudCover = nil;
++}
++
++// Requested by the TrueCloud panel's Play button: add the cloud PC if needed, pair (the PIN is
++// submitted automatically), then auto-launch "Desktop".
++- (void) trueCloudConnectToAddress:(NSString*)address {
++    NSLog(@"[TrueCloud] connect requested for %@ (%lu known hosts)", address, (unsigned long)hostList.count);
++    if (address.length == 0) {
++        return;
++    }
++    _trueCloudLaunchAddress = address;
++    [self trueCloudShowCover:@"Connecting to your cloud PC"];
++
++    TemporaryHost* existing = nil;
++    @synchronized(hostList) {
++        for (TemporaryHost* host in hostList) {
++            if ([self trueCloudHost:host matchesAddress:address]) {
++                existing = host;
++                break;
++            }
++        }
++    }
++    if (existing != nil) {
++        NSLog(@"[TrueCloud] using saved host %@ (state %d, pair state %d)", existing.name, existing.state, existing.pairState);
++        [self hostClicked:existing view:self.view];
++        return;
++    }
++    NSLog(@"[TrueCloud] adding host %@", address);
++
++    [self showLoadingFrame:^{
++        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
++            [self->_discMan discoverHost:address withCallback:^(TemporaryHost* host, NSString* error) {
++                dispatch_async(dispatch_get_main_queue(), ^{
++                    NSLog(@"[TrueCloud] discover %@ → %@", address, host != nil ? host.name : error);
++                    [self hideLoadingFrame:^{
++                        if (host == nil) {
++                            self->_trueCloudLaunchAddress = nil;
++                            UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"Couldn't Reach Cloud PC" message:error preferredStyle:UIAlertControllerStyleAlert];
++                            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
++                                [self showTrueCloudAnimated:YES];
++                            }]];
++                            [[self activeViewController] presentViewController:alert animated:YES completion:nil];
++                            return;
++                        }
++                        @synchronized(hostList) {
++                            [hostList addObject:host];
++                        }
++                        [self updateHosts];
++                        [self hostClicked:host view:self.view];
++                    }];
++                });
++            }];
++        });
++    }];
+ }
+ 
+ - (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView cellForItemAtIndexPath:(NSIndexPath *)indexPath {
