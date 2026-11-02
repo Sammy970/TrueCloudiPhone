@@ -145,8 +145,9 @@ final class TrueCloudOnScreenControls: NSObject {
     private(set) var selected: OSCElement?
     /// Called when the selection or layout changes, so an editor panel can refresh.
     var onChange: (() -> Void)?
-    /// In-stream editing: the panel shown over the stream.
-    private var panel: UIView?
+    /// In-stream editing: the panel's own window above the stream. A window of its own keeps the
+    /// stream view's gesture recognizers from stealing the panel's touches.
+    private var panelWindow: PanelWindow?
     /// Whether "Try it" is on in a standalone editor: the controls then respond instead of moving.
     var isTrying = false {
         didSet {
@@ -281,7 +282,7 @@ final class TrueCloudOnScreenControls: NSObject {
     }
 
     /// Positions every control. Cheap enough to call whenever the size, level or layout changes.
-    func relayout(force: Bool = false) {
+    func relayout(force: Bool = false, only: OSCElement? = nil) {
         guard let view else { return }
         if !force, view.bounds == lastBounds, view.safeAreaInsets == lastInsets { return }
         lastBounds = view.bounds
@@ -292,7 +293,7 @@ final class TrueCloudOnScreenControls: NSObject {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         root.frame = view.bounds
-        root.opacity = isArranging ? 1 : Float(layout.opacity)
+        root.opacity = Float(layout.opacity)
         rects.removeAll()
         for element in OSCElement.allCases {
             let c = center(of: element, in: view)
@@ -305,7 +306,8 @@ final class TrueCloudOnScreenControls: NSObject {
                 rects[isLeft ? .leftKnob : .rightKnob] = CGRect(x: base.midX + o.x - inner / 2, y: base.midY + o.y - inner / 2, width: inner, height: inner)
             }
         }
-        for part in OSCPart.allCases { update(part) }
+        // While a slider is dragged only the control being changed needs its art redrawn.
+        for part in OSCPart.allCases where only == nil || part.element == only { update(part) }
         updateSelection()
         CATransaction.commit()
     }
@@ -743,14 +745,19 @@ final class TrueCloudOnScreenControls: NSObject {
         onChange?()
     }
 
+    /// Dragging the Size slider calls this for every tick, so it only redraws the selected control;
+    /// `persistLayout()` saves once the finger lifts. Steps of 2% keep the glass art cache hitting.
     func setSelectedScale(_ scale: Double) {
         guard let selected else { return }
         var item = layout.item(selected)
-        item.scale = min(max(scale, OSCLayout.scaleRange.lowerBound), OSCLayout.scaleRange.upperBound)
+        let clamped = min(max(scale, OSCLayout.scaleRange.lowerBound), OSCLayout.scaleRange.upperBound)
+        item.scale = (clamped / 0.02).rounded() * 0.02
+        guard item.scale != layout.item(selected).scale else { return }
         layout.set(selected, item)
-        OSCLayoutStore.save(layout)
-        relayout(force: true)
+        relayout(force: true, only: selected)
     }
+
+    func persistLayout() { OSCLayoutStore.save(layout) }
 
     func toggleSelectedHidden() {
         guard let selected else { return }
@@ -762,10 +769,13 @@ final class TrueCloudOnScreenControls: NSObject {
         onChange?()
     }
 
+    /// Opacity is a single layer property, so nothing is redrawn; it's saved by `persistLayout()`.
     func setOpacity(_ opacity: Double) {
         layout.opacity = min(max(opacity, OSCLayout.opacityRange.lowerBound), OSCLayout.opacityRange.upperBound)
-        OSCLayoutStore.save(layout)
-        relayout(force: true)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        root.opacity = Float(layout.opacity)
+        CATransaction.commit()
     }
 
     func resetLayout() {
@@ -786,25 +796,40 @@ final class TrueCloudOnScreenControls: NSObject {
 
     /// Shows the editor panel over the running stream. The stream sees nothing while it's open.
     private func beginStreamEditing() {
-        guard !isEditing, let view else { return }
+        guard !isEditing, let scene = view?.window?.windowScene else { return }
         setEditing(true)
+        let host = UIViewController()
+        host.view.backgroundColor = .clear
         let panel = OSCEditorPanel(controls: self, showsTryIt: false) { [weak self] in self?.endStreamEditing() }
-        panel.layer.zPosition = 2000
-        view.addSubview(panel)
         panel.translatesAutoresizingMaskIntoConstraints = false
+        host.view.addSubview(panel)
         NSLayoutConstraint.activate([
-            panel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            panel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6),
+            panel.centerXAnchor.constraint(equalTo: host.view.centerXAnchor),
+            panel.topAnchor.constraint(equalTo: host.view.safeAreaLayoutGuide.topAnchor, constant: 6),
             panel.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
-            panel.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
+            panel.widthAnchor.constraint(lessThanOrEqualTo: host.view.widthAnchor, constant: -40),
         ])
-        self.panel = panel
+        let window = PanelWindow(windowScene: scene)
+        window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 2)
+        window.backgroundColor = .clear
+        window.rootViewController = host
+        // Shown without becoming key, so Moonlight keeps keyboard and controller input.
+        window.isHidden = false
+        panelWindow = window
     }
 
     private func endStreamEditing() {
-        panel?.removeFromSuperview()
-        panel = nil
+        panelWindow?.isHidden = true
+        panelWindow = nil
         setEditing(false)
+    }
+}
+
+/// Takes touches on the editor panel only; everything else falls through to the stream below.
+private final class PanelWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === rootViewController?.view ? nil : hit
     }
 }
 

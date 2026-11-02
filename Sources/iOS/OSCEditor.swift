@@ -66,6 +66,9 @@ final class OSCEditorPanel: UIView {
         for slider in [sizeSlider, opacitySlider] { slider.tintColor = OSCGlass.blue }
         sizeSlider.addTarget(self, action: #selector(sizeChanged), for: .valueChanged)
         opacitySlider.addTarget(self, action: #selector(opacityChanged), for: .valueChanged)
+        for slider in [sizeSlider, opacitySlider] {
+            slider.addTarget(self, action: #selector(sliderReleased), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        }
 
         mode.selectedSegmentIndex = 0
         mode.addTarget(self, action: #selector(modeChanged), for: .valueChanged)
@@ -164,6 +167,7 @@ final class OSCEditorPanel: UIView {
         opacityValue.text = "\(Int((controls.layout.opacity * 100).rounded()))%"
     }
 
+    @objc private func sliderReleased() { controls.persistLayout() }
     @objc private func modeChanged() { controls.isTrying = mode.selectedSegmentIndex == 1 }
     @objc private func hideTapped() { controls.toggleSelectedHidden() }
     @objc private func resetTapped() { controls.resetLayout() }
