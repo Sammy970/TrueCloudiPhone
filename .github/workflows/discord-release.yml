@@ -1,0 +1,25 @@
+name: Announce release on Discord
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  discord:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to #changelog
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          APP: "TrueCloud for iPhone"
+          TAG: ${{ github.event.release.tag_name }}
+          URL: ${{ github.event.release.html_url }}
+          BODY: ${{ github.event.release.body }}
+          COLOR: 1357987
+        run: |
+          if [ -z "$WEBHOOK" ]; then echo "DISCORD_WEBHOOK_URL not set, skipping"; exit 0; fi
+          jq -n --arg app "$APP" --arg tag "$TAG" --arg url "$URL" --arg body "$BODY" --argjson color "$COLOR" \
+            '{username: "Release Announcer", embeds: [{title: ($app + " " + $tag), url: $url, description: ((if $body == "" then "Maintenance release." else $body end) | .[0:3800]), color: $color}]}' \
+            | curl -sS -f -H "Content-Type: application/json" -d @- "$WEBHOOK"
