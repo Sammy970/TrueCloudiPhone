@@ -10,16 +10,35 @@ jobs:
   discord:
     runs-on: ubuntu-latest
     steps:
-      - name: Post to #changelog
+      - name: Post to the changelog channel
         env:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EMOJI: "📱"
           APP: "TrueCloud for iPhone"
+          COLOR: 1357987
+          FOOTER: "Unofficial client · not affiliated with TrueCloud"
           TAG: ${{ github.event.release.tag_name }}
           URL: ${{ github.event.release.html_url }}
+          PUBLISHED: ${{ github.event.release.published_at }}
           BODY: ${{ github.event.release.body }}
-          COLOR: 1357987
         run: |
           if [ -z "$WEBHOOK" ]; then echo "DISCORD_WEBHOOK_URL not set, skipping"; exit 0; fi
-          jq -n --arg app "$APP" --arg tag "$TAG" --arg url "$URL" --arg body "$BODY" --argjson color "$COLOR" \
-            '{username: "Release Announcer", embeds: [{title: ($app + " " + $tag), url: $url, description: ((if $body == "" then "Maintenance release." else $body end) | .[0:3800]), color: $color}]}' \
+          cat > "${RUNNER_TEMP:-/tmp}/embed.jq" <<'JQ'
+          def clean: gsub("\r"; "") | gsub("\n*\\*\\*Install:\\*\\*[^\n]*"; "") | gsub("\n*Unofficial client[^\n]*"; "") | sub("^\\s+"; "") | sub("\\s+$"; "");
+          def trunc: if length > 1100 then (.[0:1100] | sub("\n[^\n]*$"; "")) + "\n…" else . end;
+          ($body | clean | trunc) as $notes
+          | {
+              username: "Release Announcer",
+              embeds: [{
+                title: ($emoji + " " + $app + " · " + $tag),
+                url: $url,
+                description: ((if $notes == "" then "Maintenance release." else $notes end) + "\n\n**[Full notes and download](" + $url + ")**"),
+                color: $color,
+                timestamp: $time,
+                footer: { text: $footer }
+              }]
+            }
+          JQ
+          jq -n --arg body "$BODY" --arg emoji "$EMOJI" --arg app "$APP" --arg tag "$TAG" --arg url "$URL" \
+            --argjson color "$COLOR" --arg time "$PUBLISHED" --arg footer "$FOOTER" -f "${RUNNER_TEMP:-/tmp}/embed.jq" \
             | curl -sS -f -H "Content-Type: application/json" -d @- "$WEBHOOK"
