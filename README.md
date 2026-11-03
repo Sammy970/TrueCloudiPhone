@@ -19,6 +19,11 @@ TrueCloud built into the open-source Moonlight client: one app, automatic pairin
 
 <p><a href="#install-with-sidestore-no-xcode-needed"><b>Install</b></a> &nbsp;·&nbsp; <a href="#a-whole-session-on-one-screen">Screenshots</a> &nbsp;·&nbsp; <a href="#what-it-does">What it does</a> &nbsp;·&nbsp; <a href="#glass-on-screen-controls-placed-where-you-want-them">Controls</a> &nbsp;·&nbsp; <a href="#build-and-install">Build and install</a> &nbsp;·&nbsp; <a href="#how-it-works">How it works</a> &nbsp;·&nbsp; <a href="#made-by">Made by</a></p>
 
+<p>
+  <a href="https://discord.gg/GVDYtpWHps"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join the Samyak Labs Discord"></a><br>
+  <b>Need help, found a bug, or have an idea?</b> Join the community: get help, report bugs and suggest features for TrueCloud.
+</p>
+
 </div>
 
 > [!IMPORTANT]
