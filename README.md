@@ -8,7 +8,7 @@
 TrueCloud built into the open-source Moonlight client: one app, automatic pairing, no addresses or PINs to type.
 
 <p>
-  <img src="https://img.shields.io/badge/version-0.1.1-00A396?style=flat-square" alt="Version 0.1.1">
+  <img src="https://img.shields.io/badge/version-0.1.2-00A396?style=flat-square" alt="Version 0.1.2">
   <img src="https://img.shields.io/badge/iOS-17%2B%20·%20glass%20on%2026%2B-111111?style=flat-square&logo=apple&logoColor=white" alt="iOS 26+">
   <img src="https://img.shields.io/badge/Swift-5-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift">
   <img src="https://img.shields.io/badge/UI-Liquid%20Glass-00A396?style=flat-square" alt="Liquid Glass">
@@ -96,12 +96,14 @@ does the streaming underneath; you never see its host list or settings.
 - **A2 or A4 server picker**, remembered between launches.
 - **Shut Down** with a confirmation, plus **Force Stop** and **Unpair All Devices** under the "…" menu, both confirmed.
 - **Stream settings in the app:** resolution up to 4K, 30/60/120 FPS, bitrate with data use per hour, HEVC,
-  trackpad or direct touch, on-screen controls, stats overlay and where the sound plays.
+  stats overlay and where the sound plays.
+- **A Controls screen of its own:** on-screen controls (Off, Auto, Simple, Full), trackpad or direct touch, floating sticks,
+  fade when idle, the layout editor and the controller check, all in one place.
 - **Network check** before you start: latency to the gateway, jitter, packet loss and download speed, with a verdict and a bitrate suggestion.
 - **Controller check:** a drawn controller that mirrors every press, stick and trigger, and tells you whether Moonlight will use it.
 - **In-stream overlay:** a small pill with time left and live latency. Tap it for the full card, or to edit the on-screen controls.
   It warns you when the connection gets busy and when plan time is running out.
-- **Glass on-screen controls** you can move, resize and fade (below).
+- **Glass on-screen controls** you can move, resize, remove and fade, with floating sticks that appear under your thumb (below).
 - **Liquid Glass on iOS 26,** with a frosted fallback on earlier versions, in light and dark.
 
 Google sign-in, which the website also offers, isn't supported. Use "Forgot password?" on the website once to add a password to a Google-created account.
@@ -114,7 +116,7 @@ Google sign-in, which the website also offers, isn't supported. Use "Forgot pass
       <picture><source media="(prefers-color-scheme: light)" srcset=".github/screenshots/light-controllers.png"><img src=".github/screenshots/dark-controllers.png" width="100%" alt="Controller check: a drawn gamepad with a Ready badge"></picture>
     </td>
     <td width="70%" valign="top">
-      <p>The <b>Controllers</b> sheet shows whether a controller will work before you start the cloud PC.</p>
+      <p>The controller check (<b>Controls → Check a controller</b>) shows whether a controller will work before you start the cloud PC.</p>
       <ul>
         <li><b>A drawn controller that mirrors yours:</b> buttons light up, the sticks move and the triggers fill as you pull them.</li>
         <li><b>Ready to play, or not:</b> whether your iPhone recognises the controller, so Moonlight can send it to the cloud PC.</li>
@@ -126,18 +128,45 @@ Google sign-in, which the website also offers, isn't supported. Use "Forgot pass
 
 ## Glass on-screen controls, placed where you want them
 
-No controller handy? The on-screen gamepad is drawn as glass, and you decide where each piece goes.
+No controller handy? The on-screen gamepad is drawn as glass, and you decide where each piece goes. The editor keeps out of the
+way: a small pill at the top, the controls themselves in the clear, and a faint blue tint while you edit.
 
 <p align="center">
-  <img src=".github/screenshots/controls-editor.png" width="100%" alt="The controls editor in landscape: glass controls over a sunset scene, with a panel for size, opacity, hide, reset and done">
+  <img src=".github/screenshots/controls-editor.png" width="100%" alt="The controls editor in landscape: glass controls over a sunset scene under a blue tint, with a small pill at the top centre holding a menu and a checkmark, and a sliders button at the top right">
 </p>
 
-- **Open the editor** from **Stream Settings → Customize on-screen controls** before you connect, or from the **Edit controls** button on
+- **Open the editor** from **Controls → Customize layout** before you connect, or from the **Edit controls** button on
   the overlay card while you're streaming.
 - **Drag** any control to move it. It snaps to the centre lines of the other controls and the screen, with a guide line.
-- **Tap** a control to select it, then use **Size** (60% to 180%) or **Hide** it. **Opacity** fades the whole gamepad, and what you see is what you get.
-- **Try it** previews presses without sending anything, so you can check the feel.
-- **Reset** puts everything back. Your layout is saved on the phone and used in every stream.
+- **Pinch** a control to resize it (60% to 180%), or use the **sliders button** at the top right for **Size** and **Opacity**.
+  What you see is what you get.
+- **Remove** a control by dragging it onto the **bin** at the bottom. Removed controls wait in the tray next to it, and a tap puts one back.
+- **Overlaps** get a red outline, so you can tell when two controls sit on top of each other.
+- **The ⋯ menu** has **Try it** (previews presses without sending anything), night or day scenery, and **Reset layout**.
+  Your layout is saved on the phone and used in every stream.
+
+<p align="center">
+  <img src=".github/screenshots/controls-tray.png" width="100%" alt="The editor with the left and right bumpers removed: a tray at the bottom with a bin and two chips, + LB and + RB, to put them back">
+  <br><sub>Removed controls sit in the tray until you put them back.</sub>
+</p>
+
+### Floating sticks and fading controls
+
+<table>
+  <tr>
+    <td width="30%" valign="top">
+      <picture><source media="(prefers-color-scheme: light)" srcset=".github/screenshots/light-controls.png"><img src=".github/screenshots/dark-controls.png" width="100%" alt="The Controls screen: on-screen controls level, floating sticks, fade, customize layout, touch mode and the controller check"></picture>
+    </td>
+    <td width="70%" valign="top">
+      <p>Both live on the <b>Controls</b> screen, next to everything else about input.</p>
+      <ul>
+        <li><b>Floating sticks:</b> touch anywhere on the left or right half of the screen and a stick appears under your finger. Both thumbs work at once, and the stick keeps working if your thumb slides outside it. Buttons still win when you touch one. The fixed sticks are hidden while this is on.</li>
+        <li><b>Fade when idle:</b> the gamepad fades out after 5, 10 or 20 seconds without a touch, and comes back on the next one. Faded controls still respond.</li>
+        <li><b>Auto level:</b> shows the full controls when no controller is connected, and only the buttons a connected controller lacks.</li>
+      </ul>
+    </td>
+  </tr>
+</table>
 
 <p align="center">
   <img src=".github/screenshots/controls-try.png" width="100%" alt="Glass controls lit up in teal as if held: A, RB, the right D-pad arrow and the left stick">
@@ -146,7 +175,7 @@ No controller handy? The on-screen gamepad is drawn as glass, and you decide whe
 
 ## Install with SideStore (no Xcode needed)
 
-**[Download TrueCloud-0.1.1.ipa](https://github.com/Sammy970/TrueCloudiPhone/releases/latest)**: unsigned, so it
+**[Download TrueCloud-0.1.2.ipa](https://github.com/Sammy970/TrueCloudiPhone/releases/latest)**: unsigned, so it
 contains nothing personal, and you sign it with your own Apple ID.
 
 1. Set up [SideStore](https://sidestore.io) on your iPhone (a one-time setup with a computer; their guide walks you
@@ -188,8 +217,9 @@ APPEARANCE=light scripts/sim-shot.sh home:idle:network light-network 16
 |---|---|
 | `login` | The sign-in screen |
 | `home:<phase>` | `checking`, `idle`, `starting`, `booting`, `ready`, `pairing`, `streaming` or `shutting` |
-| `home:<phase>:settings`, `:network`, `:controllers`, `:about` | That sheet over the home screen; add `:sample` for a sample controller |
+| `home:<phase>:settings`, `:network`, `:controls`, `:controllers`, `:about` | That sheet over the home screen; add `:sample` for a sample controller |
 | `controls`, `controls:selected`, `controls:play`, `controls:bright` | The on-screen controls editor, with a control selected, held down, or on the day scene |
+| `controls:selected:options`, `controls:selected:removed` | The editor with the Size and Opacity card open, or with two controls removed so the tray shows |
 | `controls:selftest` | Runs the input-logic checks and logs the result |
 
 `TRUECLOUD_APPEARANCE=light|dark` forces the appearance and `TRUECLOUD_SNAPSHOT=<name>` saves the screen after it settles.

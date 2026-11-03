@@ -10,7 +10,7 @@ enum Config {
     static let keychainService = "com.samyakjain.truecloud"
 
     /// This app's version. The build scripts stamp it into the app bundle.
-    static let appVersion = "0.1.1"
+    static let appVersion = "0.1.2"
 
     // MARK: Credits
 

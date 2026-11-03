@@ -44,6 +44,7 @@ struct TrueCloudHomeView: View {
     @State private var showingSettings = false
     @State private var showingNetwork = false
     @State private var showingAbout = false
+    @State private var showingControls = false
     @State private var showingControllers = false
     /// Watches controllers for the controller-check card and sheet.
     @StateObject private var gamepads = GamepadMonitor()
@@ -96,7 +97,7 @@ struct TrueCloudHomeView: View {
                     VStack(spacing: 14) {
                         streamCard.reveal(0.3)
                         networkCard.reveal(0.33)
-                        controllerCard.reveal(0.345)
+                        controlsCard.reveal(0.345)
                         appCard.reveal(0.36)
                     }
                 }
@@ -177,6 +178,9 @@ struct TrueCloudHomeView: View {
                 }
             }
             .sensoryFeedback(.success, trigger: networkCheck.stage == .done)
+        }
+        .sheet(isPresented: $showingControls) {
+            ControlsSheet(prefs: $prefs, monitor: gamepads)
         }
         .sheet(isPresented: $showingControllers) {
             ControllersSheet(monitor: gamepads) { showingControllers = false }
@@ -354,19 +358,18 @@ struct TrueCloudHomeView: View {
         .buttonStyle(.plain)
     }
 
-    private var controllerCard: some View {
-        Button { showingControllers = true } label: {
+    private var controlsCard: some View {
+        Button { showingControls = true } label: {
             card {
                 HStack(spacing: 12) {
                     Image(systemName: "gamecontroller.fill")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 34, height: 34)
-                        .background((gamepads.pads.isEmpty ? Color.tcAccent : .green).gradient,
-                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(Color.tcAccent.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Controller check").font(.subheadline.weight(.semibold))
-                        Text(gamepads.pads.first.map { "\($0.name) · Ready to play" } ?? "Check a controller's buttons and sticks before you play")
+                        Text("Controls").font(.subheadline.weight(.semibold))
+                        Text(controlsSummary)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -378,6 +381,17 @@ struct TrueCloudHomeView: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(connecting)
+    }
+
+    /// e.g. "Auto · Trackpad · Floating sticks on · Xbox Wireless Controller connected"
+    private var controlsSummary: String {
+        let level = ["Off", "Auto", "Simple", "Full"][min(max(prefs.onscreenControls, 0), 3)]
+        var parts = [level, prefs.directTouch ? "Direct touch" : "Trackpad"]
+        if OSCLayoutStore.load().floatingSticks { parts.append("Floating sticks on") }
+        var text = parts.joined(separator: " · ")
+        if let pad = gamepads.pads.first { text += " · \(pad.name) connected" }
+        return text
     }
 
     /// Debug builds only: `TRUECLOUD_PREVIEW=home:<phase>:controllers` opens the controller check, and
@@ -387,6 +401,7 @@ struct TrueCloudHomeView: View {
         guard let value = ProcessInfo.processInfo.environment["TRUECLOUD_PREVIEW"] else { return }
         if value.contains(":sample") { gamepads.showPreview() }
         if value.contains(":controllers") { showingControllers = true }
+        if value.contains(":controls") { showingControls = true }
         // `:settings` opens Stream settings; `:roundtrip` then opens the controls editor and closes it again.
         if value.contains(":settings") { showingSettings = true }
         if value.hasSuffix(":network") { showingNetwork = true }

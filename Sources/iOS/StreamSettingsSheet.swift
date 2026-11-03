@@ -104,41 +104,6 @@ struct StreamSettingsSheet: View {
                 }
 
                 Section {
-                    Picker("Touch", selection: $prefs.directTouch) {
-                        Text("Trackpad").tag(false)
-                        Text("Direct touch").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    Picker("On-screen controls", selection: $prefs.onscreenControls) {
-                        Text("Off").tag(0)
-                        Text("Auto").tag(1)
-                        Text("Simple").tag(2)
-                        Text("Full").tag(3)
-                    }
-                    Button {
-                        TrueCloudPanel.presentControlsEditor()
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Customize on-screen controls")
-                                Text("Move, resize or hide each control, and set how see-through they are.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 8)
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .foregroundStyle(.primary)
-                } header: {
-                    Text("Controls")
-                } footer: {
-                    Text("Trackpad moves a cursor like a laptop trackpad. Direct touch clicks where your finger lands.")
-                }
-
-                Section {
                     Toggle("Show performance stats", isOn: $prefs.statsOverlay)
                     Toggle(isOn: $prefs.audioOnPC) {
                         Text("Play sound on the cloud PC")
@@ -162,5 +127,122 @@ struct StreamSettingsSheet: View {
         MoonlightPrefs.bitrates.contains(prefs.bitrateKbps)
             ? MoonlightPrefs.bitrates
             : (MoonlightPrefs.bitrates + [prefs.bitrateKbps]).sorted()
+    }
+}
+
+/// Touch, on-screen controls and the controller check, kept apart from the stream's picture settings.
+struct ControlsSheet: View {
+    @Binding var prefs: MoonlightPrefs
+    @ObservedObject var monitor: GamepadMonitor
+    @Environment(\.dismiss) private var dismiss
+    /// Floating sticks and fade live in the on-screen layout, not in Moonlight's settings.
+    @State private var floatingSticks = false
+    @State private var fadeAfter = 0.0
+    @State private var loaded = false
+    @State private var showingControllers = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Level", selection: $prefs.onscreenControls) {
+                        Text("Off").tag(0)
+                        Text("Auto").tag(1)
+                        Text("Simple").tag(2)
+                        Text("Full").tag(3)
+                    }
+                    Toggle(isOn: $floatingSticks) {
+                        Text("Floating sticks")
+                        Text("Touch anywhere on the left or right half of the screen and a stick appears under your finger. The fixed sticks are hidden.")
+                    }
+                    Picker("Fade controls when idle", selection: $fadeAfter) {
+                        ForEach(OSCLayout.fadeChoices, id: \.self) { Text($0 == 0 ? "Off" : "\(Int($0)) s").tag($0) }
+                    }
+                    Button {
+                        TrueCloudPanel.presentControlsEditor()
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Customize layout")
+                                Text("Move, resize or remove each control, and set how see-through they are.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                } header: {
+                    Text("On-screen controls")
+                } footer: {
+                    Text("Auto shows the full controls when no controller is connected, and only the buttons a connected controller lacks (nothing if it has them all). Off hides them; Simple and Full always show them, Simple with fewer buttons.")
+                }
+
+                Section {
+                    Picker("Touch", selection: $prefs.directTouch) {
+                        Text("Trackpad").tag(false)
+                        Text("Direct touch").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Touch")
+                } footer: {
+                    Text("Trackpad moves a cursor like a laptop trackpad. Direct touch clicks where your finger lands.")
+                }
+
+                Section {
+                    Button {
+                        showingControllers = true
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Check a controller")
+                                Text(monitor.pads.first?.name ?? "Check a controller's buttons and sticks before you play")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                } header: {
+                    Text("Controller")
+                }
+            }
+            .navigationTitle("Controls")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .onAppear {
+            let layout = OSCLayoutStore.load()
+            floatingSticks = layout.floatingSticks
+            fadeAfter = layout.fadeAfter
+            loaded = true
+        }
+        .onChange(of: floatingSticks) { _, _ in saveLayout() }
+        .onChange(of: fadeAfter) { _, _ in saveLayout() }
+        .onChange(of: prefs) { _, value in value.save() }
+        .sheet(isPresented: $showingControllers) {
+            ControllersSheet(monitor: monitor) { showingControllers = false }
+        }
+    }
+
+    /// Re-loads first so the editor's positions and opacity are never overwritten with stale ones.
+    private func saveLayout() {
+        guard loaded else { return }
+        var layout = OSCLayoutStore.load()
+        layout.floatingSticks = floatingSticks
+        layout.fadeAfter = fadeAfter
+        OSCLayoutStore.save(layout)
     }
 }

@@ -1,24 +1,55 @@
 import UIKit
 
-// MARK: - Panel
+// MARK: - Editor chrome
 
-/// The floating panel for arranging the controls: size and opacity, hide, reset, done. Shown over the
-/// full-screen editor and over a running stream.
+/// The editor's controls, all at the screen edges so the pad being arranged stays in the clear: a slim pill at the top
+/// leading corner (menu, Done), a round Appearance button at the top trailing corner (it opens a small card with Size and
+/// Opacity), a hint line at the top centre, and a tray at the bottom centre that appears while a control is dragged (a bin
+/// to drop it on) or when some are removed (chips to put them back). It fills its superview and lets every touch outside
+/// those pieces through, so the controls underneath (and, in-stream, the stream) keep working. Shown over the full-screen
+/// editor and over a running stream.
 @MainActor
 final class OSCEditorPanel: UIView {
     private let controls: TrueCloudOnScreenControls
     private let done: () -> Void
-    private let titleLabel = UILabel()
+    private let showsTryIt: Bool
+    /// Extra entries for the `…` menu (the standalone editor adds its night/day switch).
+    var extraActions: [UIMenuElement] = [] {
+        didSet {
+            menuKey = nil
+            rebuildMenu()
+        }
+    }
+    private var menuKey: String?
+
+    private lazy var pill = glass(radius: 22)
+    private let menuButton = UIButton(type: .system)
+    private let doneButton = UIButton(type: .system)
+    private lazy var round = glass(radius: 22)
+    private let appearanceButton = UIButton(type: .system)
     private let hintLabel = UILabel()
+    private var hintTask: Task<Void, Never>?
+    private var hintWanted = false
+
+    // The Appearance card, with a full-screen catcher under it while it's open so a tap outside closes it.
+    private lazy var popover = glass(radius: 18)
+    private let catcher = UIControl()
+    private var appearanceOpen = false
     private let sizeSlider = UISlider()
     private let sizeValue = UILabel()
+    private let sizeNote = UILabel()
     private let opacitySlider = UISlider()
     private let opacityValue = UILabel()
-    private let hideButton = UIButton(type: .system)
-    private let resetButton = UIButton(type: .system)
-    private let doneButton = UIButton(type: .system)
-    private let mode = UISegmentedControl(items: ["Arrange", "Try it"])
-    private let showsTryIt: Bool
+
+    // The tray: a bin (the drop target while dragging) and one chip per removed control.
+    private lazy var tray = glass(radius: 21)
+    private let binButton = UIButton(type: .system)
+    private let chipScroll = UIScrollView()
+    private let chipStack = UIStackView()
+    private var chipsShown: [OSCElement] = []
+    private var dragging = false
+    private var overBin = false
+    private lazy var tick = UISelectionFeedbackGenerator()
 
     init(controls: TrueCloudOnScreenControls, showsTryIt: Bool, done: @escaping () -> Void) {
         self.controls = controls
@@ -28,84 +59,276 @@ final class OSCEditorPanel: UIView {
         overrideUserInterfaceStyle = .dark
         build()
         controls.onChange = { [weak self] in self?.refresh() }
+        controls.onDragChange = { [weak self] element, location in self?.dragChanged(element, location) }
         refresh()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    private func build() {
+    /// Touches outside the pill, the round button, the card and the tray go to whatever is underneath.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
+    }
+
+    /// The tray moves when chips come and go, and the controls need to know where the bin is.
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        controls.setBin(binButton.convert(binButton.bounds, to: self), in: self)
+    }
+
+    private func glass(radius: CGFloat) -> UIVisualEffectView {
         let effect: UIVisualEffect
         if #available(iOS 26.0, *) {
             effect = UIGlassEffect()
         } else {
             effect = UIBlurEffect(style: .systemThinMaterialDark)
         }
-        let background = UIVisualEffectView(effect: effect)
-        background.layer.cornerRadius = 24
-        background.layer.cornerCurve = .continuous
-        background.clipsToBounds = true
-        background.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(background)
-        layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOpacity = 0.35
-        layer.shadowRadius = 22
-        layer.shadowOffset = CGSize(width: 0, height: 8)
+        let view = UIVisualEffectView(effect: effect)
+        view.layer.cornerRadius = radius
+        view.layer.cornerCurve = .continuous
+        view.clipsToBounds = true
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
+    }
 
-        titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
-        titleLabel.textColor = .white
-        hintLabel.font = .systemFont(ofSize: 12.5)
-        hintLabel.textColor = UIColor.white.withAlphaComponent(0.68)
-        hintLabel.numberOfLines = 1
+    private func build() {
+        let symbols = UIImage.SymbolConfiguration(pointSize: 18, weight: .medium)
+
+        // Top leading: menu and Done.
+        var menu = UIButton.Configuration.plain()
+        menu.image = UIImage(systemName: "ellipsis.circle")
+        menu.preferredSymbolConfigurationForImage = symbols
+        menu.baseForegroundColor = .white
+        menuButton.configuration = menu
+        menuButton.showsMenuAsPrimaryAction = true
+        menuButton.accessibilityLabel = "Layout menu"
+        var finish = UIButton.Configuration.filled()
+        finish.image = UIImage(systemName: "checkmark")
+        finish.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+        finish.cornerStyle = .capsule
+        finish.baseBackgroundColor = OSCGlass.blue
+        finish.baseForegroundColor = .white
+        finish.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 14)
+        doneButton.configuration = finish
+        doneButton.accessibilityLabel = "Done"
+        doneButton.addTarget(self, action: #selector(doneTapped), for: .touchUpInside)
+        let pillStack = UIStackView(arrangedSubviews: [menuButton, doneButton])
+        pillStack.spacing = 2
+        pillStack.alignment = .center
+        pillStack.translatesAutoresizingMaskIntoConstraints = false
+        pill.contentView.addSubview(pillStack)
+
+        // Top trailing: Appearance.
+        var look = UIButton.Configuration.plain()
+        look.image = UIImage(systemName: "slider.horizontal.3")
+        look.preferredSymbolConfigurationForImage = symbols
+        look.baseForegroundColor = .white
+        appearanceButton.configuration = look
+        appearanceButton.accessibilityLabel = "Appearance"
+        appearanceButton.translatesAutoresizingMaskIntoConstraints = false
+        appearanceButton.addTarget(self, action: #selector(appearanceTapped), for: .touchUpInside)
+        round.contentView.addSubview(appearanceButton)
+
+        // Top centre: a hint that gets out of the way. It takes no touches (a label doesn't by default).
+        hintLabel.text = "Drag to move · pinch to resize · drag to the bin to remove"
+        hintLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        hintLabel.textColor = UIColor.white.withAlphaComponent(0.8)
+        hintLabel.textAlignment = .center
         hintLabel.adjustsFontSizeToFitWidth = true
-        hintLabel.minimumScaleFactor = 0.8
+        hintLabel.minimumScaleFactor = 0.7
+        hintLabel.layer.shadowColor = UIColor.black.cgColor
+        hintLabel.layer.shadowOpacity = 0.6
+        hintLabel.layer.shadowRadius = 3
+        hintLabel.layer.shadowOffset = .zero
+        hintLabel.alpha = 0
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
+        hintLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        buildPopover()
+        buildTray()
+
+        for view in [pill, round, hintLabel, popover, tray] { addSubview(view) }
+        popover.isHidden = true
+        let safe = safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            // Top centre: the gap between the default Back and Start buttons, and where the eye goes first.
+            pill.centerXAnchor.constraint(equalTo: centerXAnchor),
+            pill.topAnchor.constraint(equalTo: safe.topAnchor, constant: 8),
+            pill.heightAnchor.constraint(equalToConstant: 44),
+            pillStack.topAnchor.constraint(equalTo: pill.contentView.topAnchor),
+            pillStack.bottomAnchor.constraint(equalTo: pill.contentView.bottomAnchor),
+            pillStack.leadingAnchor.constraint(equalTo: pill.contentView.leadingAnchor, constant: 4),
+            pillStack.trailingAnchor.constraint(equalTo: pill.contentView.trailingAnchor, constant: -5),
+            menuButton.widthAnchor.constraint(equalToConstant: 40),
+            menuButton.heightAnchor.constraint(equalToConstant: 40),
+            // A fixed size, or the pill squeezes the checkmark into a narrow sliver.
+            doneButton.widthAnchor.constraint(equalToConstant: 56),
+            doneButton.heightAnchor.constraint(equalToConstant: 34),
+
+            round.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -8),
+            round.topAnchor.constraint(equalTo: safe.topAnchor, constant: 8),
+            round.widthAnchor.constraint(equalToConstant: 44),
+            round.heightAnchor.constraint(equalToConstant: 44),
+            appearanceButton.topAnchor.constraint(equalTo: round.contentView.topAnchor),
+            appearanceButton.bottomAnchor.constraint(equalTo: round.contentView.bottomAnchor),
+            appearanceButton.leadingAnchor.constraint(equalTo: round.contentView.leadingAnchor),
+            appearanceButton.trailingAnchor.constraint(equalTo: round.contentView.trailingAnchor),
+
+            // Just under the pill, so it never sits on a control.
+            hintLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            hintLabel.topAnchor.constraint(equalTo: pill.bottomAnchor, constant: 6),
+            hintLabel.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: 16),
+            hintLabel.trailingAnchor.constraint(lessThanOrEqualTo: safe.trailingAnchor, constant: -16),
+
+            popover.topAnchor.constraint(equalTo: round.bottomAnchor, constant: 8),
+            popover.trailingAnchor.constraint(equalTo: round.trailingAnchor),
+            popover.widthAnchor.constraint(equalToConstant: 280),
+
+            tray.centerXAnchor.constraint(equalTo: centerXAnchor),
+            tray.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -6),
+            tray.heightAnchor.constraint(equalToConstant: 42),
+        ])
+        rebuildMenu()
+    }
+
+    /// The Appearance card: Size for the selected control, Opacity for the whole pad.
+    private func buildPopover() {
+        let title = UILabel()
+        title.text = "Appearance"
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.textColor = UIColor.white.withAlphaComponent(0.9)
+        sizeNote.text = "Select a control to resize it"
+        sizeNote.font = .systemFont(ofSize: 11.5)
+        sizeNote.textColor = UIColor.white.withAlphaComponent(0.55)
 
         sizeSlider.minimumValue = Float(OSCLayout.scaleRange.lowerBound)
         sizeSlider.maximumValue = Float(OSCLayout.scaleRange.upperBound)
         opacitySlider.minimumValue = Float(OSCLayout.opacityRange.lowerBound)
         opacitySlider.maximumValue = Float(OSCLayout.opacityRange.upperBound)
-        for slider in [sizeSlider, opacitySlider] { slider.tintColor = OSCGlass.blue }
-        sizeSlider.addTarget(self, action: #selector(sizeChanged), for: .valueChanged)
-        opacitySlider.addTarget(self, action: #selector(opacityChanged), for: .valueChanged)
         for slider in [sizeSlider, opacitySlider] {
+            slider.tintColor = OSCGlass.blue
             slider.addTarget(self, action: #selector(sliderReleased), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         }
+        sizeSlider.addTarget(self, action: #selector(sizeChanged), for: .valueChanged)
+        opacitySlider.addTarget(self, action: #selector(opacityChanged), for: .valueChanged)
 
-        mode.selectedSegmentIndex = 0
-        mode.addTarget(self, action: #selector(modeChanged), for: .valueChanged)
-
-        style(hideButton, "Hide", filled: false)
-        style(resetButton, "Reset", filled: false)
-        style(doneButton, "Done", filled: true)
-        hideButton.addTarget(self, action: #selector(hideTapped), for: .touchUpInside)
-        resetButton.addTarget(self, action: #selector(resetTapped), for: .touchUpInside)
-        doneButton.addTarget(self, action: #selector(doneTapped), for: .touchUpInside)
-
-        let header = UIStackView(arrangedSubviews: [titleLabel, hintLabel])
-        header.axis = .vertical
-        header.spacing = 2
-        let buttons = UIStackView(arrangedSubviews: [hideButton, resetButton, doneButton])
-        buttons.distribution = .fillEqually
-        buttons.spacing = 8
-        var rows: [UIView] = [header]
-        if showsTryIt { rows.append(mode) }
-        rows += [row("Size", sizeSlider, sizeValue), row("Opacity", opacitySlider, opacityValue), buttons]
-        let stack = UIStackView(arrangedSubviews: rows)
+        let stack = UIStackView(arrangedSubviews: [title, row("Size", sizeSlider, sizeValue), sizeNote, row("Opacity", opacitySlider, opacityValue)])
         stack.axis = .vertical
         stack.spacing = 7
         stack.translatesAutoresizingMaskIntoConstraints = false
-        background.contentView.addSubview(stack)
-
+        popover.contentView.addSubview(stack)
         NSLayoutConstraint.activate([
-            background.topAnchor.constraint(equalTo: topAnchor),
-            background.bottomAnchor.constraint(equalTo: bottomAnchor),
-            background.leadingAnchor.constraint(equalTo: leadingAnchor),
-            background.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: background.contentView.topAnchor, constant: 12),
-            stack.bottomAnchor.constraint(equalTo: background.contentView.bottomAnchor, constant: -11),
-            stack.leadingAnchor.constraint(equalTo: background.contentView.leadingAnchor, constant: 18),
-            stack.trailingAnchor.constraint(equalTo: background.contentView.trailingAnchor, constant: -18),
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 300),
+            stack.topAnchor.constraint(equalTo: popover.contentView.topAnchor, constant: 12),
+            stack.bottomAnchor.constraint(equalTo: popover.contentView.bottomAnchor, constant: -12),
+            stack.leadingAnchor.constraint(equalTo: popover.contentView.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: popover.contentView.trailingAnchor, constant: -14),
         ])
+
+        catcher.translatesAutoresizingMaskIntoConstraints = false
+        catcher.addTarget(self, action: #selector(catcherTapped), for: .touchDown)
+    }
+
+    /// The bin is always in the tray; the chips scroll beside it when something is removed.
+    private func buildTray() {
+        binButton.setImage(UIImage(systemName: "trash"), for: .normal)
+        binButton.setPreferredSymbolConfiguration(UIImage.SymbolConfiguration(pointSize: 16, weight: .medium), forImageIn: .normal)
+        binButton.tintColor = UIColor.white.withAlphaComponent(0.9)
+        binButton.layer.cornerRadius = 17
+        binButton.accessibilityLabel = "Remove the selected control"
+        binButton.addTarget(self, action: #selector(binTapped), for: .touchUpInside)
+
+        chipScroll.showsHorizontalScrollIndicator = false
+        chipScroll.isHidden = true
+        chipStack.axis = .horizontal
+        chipStack.spacing = 6
+        chipStack.translatesAutoresizingMaskIntoConstraints = false
+        chipScroll.addSubview(chipStack)
+        let width = chipScroll.widthAnchor.constraint(equalTo: chipStack.widthAnchor)
+        width.priority = .defaultHigh
+
+        let row = UIStackView(arrangedSubviews: [binButton, chipScroll])
+        row.spacing = 4
+        row.alignment = .center
+        row.translatesAutoresizingMaskIntoConstraints = false
+        tray.contentView.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.topAnchor.constraint(equalTo: tray.contentView.topAnchor),
+            row.bottomAnchor.constraint(equalTo: tray.contentView.bottomAnchor),
+            row.leadingAnchor.constraint(equalTo: tray.contentView.leadingAnchor, constant: 4),
+            row.trailingAnchor.constraint(equalTo: tray.contentView.trailingAnchor, constant: -8),
+            binButton.widthAnchor.constraint(equalToConstant: 34),
+            binButton.heightAnchor.constraint(equalToConstant: 34),
+            chipStack.topAnchor.constraint(equalTo: chipScroll.contentLayoutGuide.topAnchor),
+            chipStack.bottomAnchor.constraint(equalTo: chipScroll.contentLayoutGuide.bottomAnchor),
+            chipStack.leadingAnchor.constraint(equalTo: chipScroll.contentLayoutGuide.leadingAnchor),
+            chipStack.trailingAnchor.constraint(equalTo: chipScroll.contentLayoutGuide.trailingAnchor),
+            chipStack.heightAnchor.constraint(equalTo: chipScroll.frameLayoutGuide.heightAnchor),
+            chipScroll.heightAnchor.constraint(equalToConstant: 30),
+            chipScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 190),
+            width,
+        ])
+        tray.alpha = 0
+        tray.isUserInteractionEnabled = false
+    }
+
+    // MARK: Menu
+
+    /// Rebuilt only when what it shows changes (Try it on/off, whether there is anything to reset).
+    private func rebuildMenu() {
+        let key = "\(controls.isTrying)\(controls.layout.isDefault)\(extraActions.count)"
+        guard key != menuKey else { return }
+        menuKey = key
+        var items: [UIMenuElement] = []
+        if showsTryIt {
+            items.append(UIAction(title: "Try it", image: UIImage(systemName: "hand.tap"), state: controls.isTrying ? .on : .off) { [weak self] _ in
+                guard let self else { return }
+                self.controls.isTrying.toggle()
+            })
+        }
+        items += extraActions
+        let reset = UIAction(title: "Reset layout", image: UIImage(systemName: "arrow.counterclockwise"),
+                             attributes: controls.layout.isDefault ? [.destructive, .disabled] : [.destructive]) { [weak self] _ in
+            self?.controls.resetLayout()
+        }
+        items.append(UIMenu(options: .displayInline, children: [reset]))
+        menuButton.menu = UIMenu(children: items)
+    }
+
+    // MARK: Appearance card
+
+    func setAppearanceOpen(_ open: Bool, animated: Bool = true) {
+        guard open != appearanceOpen else { return }
+        appearanceOpen = open
+        appearanceButton.configuration?.baseForegroundColor = open ? OSCGlass.blue : .white
+        if open {
+            refresh()
+            insertSubview(catcher, belowSubview: popover)
+            NSLayoutConstraint.activate([
+                catcher.topAnchor.constraint(equalTo: topAnchor),
+                catcher.bottomAnchor.constraint(equalTo: bottomAnchor),
+                catcher.leadingAnchor.constraint(equalTo: leadingAnchor),
+                catcher.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ])
+            popover.isHidden = false
+            popover.alpha = 0
+            popover.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
+        } else {
+            catcher.removeFromSuperview()
+        }
+        let change = {
+            self.popover.alpha = open ? 1 : 0
+            self.popover.transform = open ? .identity : CGAffineTransform(scaleX: 0.94, y: 0.94)
+        }
+        let finish: (Bool) -> Void = { _ in
+            if !self.appearanceOpen { self.popover.isHidden = true }
+        }
+        if animated {
+            UIView.animate(withDuration: 0.18, animations: change, completion: finish)
+        } else {
+            change()
+            finish(true)
+        }
     }
 
     private func row(_ title: String, _ slider: UISlider, _ value: UILabel) -> UIView {
@@ -113,48 +336,127 @@ final class OSCEditorPanel: UIView {
         label.text = title
         label.font = .systemFont(ofSize: 13.5, weight: .medium)
         label.textColor = UIColor.white.withAlphaComponent(0.85)
-        label.widthAnchor.constraint(equalToConstant: 56).isActive = true
+        label.widthAnchor.constraint(equalToConstant: 54).isActive = true
         value.font = .monospacedDigitSystemFont(ofSize: 12.5, weight: .medium)
         value.textColor = UIColor.white.withAlphaComponent(0.7)
         value.textAlignment = .right
-        value.widthAnchor.constraint(equalToConstant: 42).isActive = true
+        value.widthAnchor.constraint(equalToConstant: 40).isActive = true
         let stack = UIStackView(arrangedSubviews: [label, slider, value])
         stack.spacing = 8
         stack.alignment = .center
         return stack
     }
 
-    private func style(_ button: UIButton, _ title: String, filled: Bool) {
-        var config: UIButton.Configuration = filled ? .filled() : .tinted()
-        config.title = title
-        config.cornerStyle = .capsule
-        config.baseBackgroundColor = filled ? OSCGlass.blue : .white
-        config.baseForegroundColor = .white
-        button.configuration = config
+    // MARK: Hint
+
+    /// Shows the hint, then lets it fade after a few seconds.
+    private func showHint() {
+        hintTask?.cancel()
+        UIView.animate(withDuration: 0.25) { self.hintLabel.alpha = 1 }
+        hintTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            self?.fadeHint()
+        }
+    }
+
+    private func fadeHint() {
+        UIView.animate(withDuration: 0.5) { self.hintLabel.alpha = 0 }
+    }
+
+    private func hideHint() {
+        hintTask?.cancel()
+        hintTask = nil
+        UIView.animate(withDuration: 0.15) { self.hintLabel.alpha = 0 }
+    }
+
+    /// It's wanted while nothing is selected (and nothing is being dragged); it comes back each time that becomes true.
+    private func updateHint() {
+        let want = controls.selected == nil && !controls.isTrying && !dragging
+        guard want != hintWanted else { return }
+        hintWanted = want
+        if want { showHint() } else { hideHint() }
+    }
+
+    // MARK: Tray
+
+    /// "Left bumper (LB)" is long for a chip, so the bracketed short form wins where there is one.
+    private func chipTitle(_ element: OSCElement) -> String {
+        let title = element.title
+        if let open = title.firstIndex(of: "("), let close = title.firstIndex(of: ")"), open < close {
+            return String(title[title.index(after: open)..<close])
+        }
+        return title
+    }
+
+    private func rebuildChips() {
+        let removed = controls.hiddenElements
+        chipScroll.isHidden = removed.isEmpty
+        guard removed != chipsShown else { return }
+        chipsShown = removed
+        for chip in chipStack.arrangedSubviews { chip.removeFromSuperview() }
+        for element in removed {
+            var config = UIButton.Configuration.tinted()
+            config.title = "+ " + chipTitle(element)
+            config.cornerStyle = .capsule
+            config.buttonSize = .small
+            config.baseBackgroundColor = OSCGlass.blue
+            config.baseForegroundColor = .white
+            let chip = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in self?.controls.restore(element) })
+            chip.accessibilityLabel = "Put back \(element.title)"
+            chipStack.addArrangedSubview(chip)
+        }
+    }
+
+    /// The tray shows while a control is dragged or something is removed.
+    private func updateTray(animated: Bool) {
+        let visible = !controls.isTrying && (dragging || !controls.hiddenElements.isEmpty)
+        tray.isUserInteractionEnabled = visible
+        if animated {
+            UIView.animate(withDuration: 0.18) { self.tray.alpha = visible ? 1 : 0 }
+        } else {
+            tray.alpha = visible ? 1 : 0
+        }
+    }
+
+    /// The controller reports a drag in progress (element and finger position in its view), and its end (nil, nil).
+    private func dragChanged(_ element: OSCElement?, _ location: CGPoint?) {
+        let now = element != nil
+        if now != dragging {
+            dragging = now
+            updateHint()
+            updateTray(animated: true)
+            layoutIfNeeded()  // `layoutSubviews` hands the controls the bin's frame
+        }
+        let over = now && location.map { controls.binFrame?.contains($0) ?? false } == true
+        guard over != overBin else { return }
+        overBin = over
+        if over { tick.selectionChanged() }
+        binButton.setImage(UIImage(systemName: over ? "trash.fill" : "trash"), for: .normal)
+        UIView.animate(withDuration: 0.15) {
+            self.binButton.backgroundColor = over ? UIColor.systemRed.withAlphaComponent(0.4) : .clear
+            self.binButton.tintColor = over ? UIColor.systemRed : UIColor.white.withAlphaComponent(0.9)
+            self.binButton.transform = over ? CGAffineTransform(scaleX: 1.2, y: 1.2) : .identity
+        }
     }
 
     func refresh() {
         let selected = controls.selected
         let item = selected.map { controls.layout.item($0) }
-        titleLabel.text = controls.isTrying ? "Try it" : (selected?.title ?? "Arrange your controls")
-        if controls.isTrying {
-            hintLabel.text = "Press the controls to preview them. Nothing is sent."
-        } else if let item {
-            hintLabel.text = item.hidden ? "Hidden: faint here, gone while you play." : "Drag to move it, Size to resize it."
-        } else {
-            hintLabel.text = "Drag to move. Tap one to resize or hide."
-        }
         let canEdit = item != nil && !controls.isTrying
         sizeSlider.isEnabled = canEdit
-        hideButton.isEnabled = canEdit
-        hideButton.configuration?.title = item?.hidden == true ? "Show" : "Hide"
-        resetButton.isEnabled = !controls.layout.isDefault
+        sizeNote.isHidden = canEdit
         if let item { sizeSlider.value = Float(item.scale) }
         sizeValue.text = item.map { "\(Int(($0.scale * 100).rounded()))%" } ?? "–"
         opacitySlider.value = Float(controls.layout.opacity)
         opacityValue.text = "\(Int((controls.layout.opacity * 100).rounded()))%"
-        mode.selectedSegmentIndex = controls.isTrying ? 1 : 0
+        rebuildChips()
+        rebuildMenu()
+        updateTray(animated: window != nil)
+        updateHint()
     }
+
+    // MARK: Actions
 
     @objc private func sizeChanged() {
         controls.setSelectedScale(Double(sizeSlider.value))
@@ -168,10 +470,20 @@ final class OSCEditorPanel: UIView {
     }
 
     @objc private func sliderReleased() { controls.persistLayout() }
-    @objc private func modeChanged() { controls.isTrying = mode.selectedSegmentIndex == 1 }
-    @objc private func hideTapped() { controls.toggleSelectedHidden() }
-    @objc private func resetTapped() { controls.resetLayout() }
-    @objc private func doneTapped() { done() }
+    @objc private func appearanceTapped() { setAppearanceOpen(!appearanceOpen) }
+    @objc private func catcherTapped() { setAppearanceOpen(false) }
+
+    /// Tapping the bin removes the selected control, for a player who would rather tap than drag.
+    @objc private func binTapped() {
+        guard let selected = controls.selected, !controls.layout.item(selected).hidden else { return }
+        controls.toggleSelectedHidden()
+        controls.select(nil)
+    }
+
+    @objc private func doneTapped() {
+        controls.persistLayout()
+        done()
+    }
 }
 
 // MARK: - Backdrop
@@ -291,14 +603,13 @@ private final class OSCCanvasView: UIView {
 @MainActor
 final class OSCEditorViewController: UIViewController {
     /// What the editor opens showing; used for screenshots.
-    enum Preview { case none, selected, playing }
+    enum Preview { case none, selected, playing, options, removed }
 
     private let canvas = OSCCanvasView()
     private let backdrop = OSCBackdropView()
     private let recorder = OSCRecordingOutput()
     private var controls: TrueCloudOnScreenControls!
     private var panel: OSCEditorPanel?
-    private let sceneButton = UIButton(type: .system)
     private let preview: Preview
     private let startsBright: Bool
     var onClose: (() -> Void)?
@@ -336,30 +647,17 @@ final class OSCEditorViewController: UIViewController {
         if preview != .playing {
             let panel = OSCEditorPanel(controls: controls, showsTryIt: true) { [weak self] in self?.close() }
             panel.translatesAutoresizingMaskIntoConstraints = false
+            // The controls are drawn on high layers; the chrome has to sit above them so the bin shows under a dragged control.
+            panel.layer.zPosition = 2000
             view.addSubview(panel)
             NSLayoutConstraint.activate([
-                panel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-                panel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6),
-                panel.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+                panel.topAnchor.constraint(equalTo: view.topAnchor),
+                panel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                panel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                panel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             ])
+            panel.extraActions = [sceneAction()]
             self.panel = panel
-        }
-
-        var config = UIButton.Configuration.tinted()
-        config.image = UIImage(systemName: startsBright ? "moon.stars.fill" : "sun.max.fill")
-        config.cornerStyle = .capsule
-        config.baseBackgroundColor = .white
-        config.baseForegroundColor = .white
-        sceneButton.configuration = config
-        sceneButton.addAction(UIAction { [weak self] _ in self?.toggleScene() }, for: .touchUpInside)
-        sceneButton.accessibilityLabel = "Switch the background between night and day"
-        sceneButton.translatesAutoresizingMaskIntoConstraints = false
-        if preview != .playing {
-            view.addSubview(sceneButton)
-            NSLayoutConstraint.activate([
-                sceneButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
-                sceneButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -14),
-            ])
         }
     }
 
@@ -376,6 +674,16 @@ final class OSCEditorViewController: UIViewController {
             break
         case .selected:
             controls.select(.face)
+        case .options:
+            controls.select(.face)
+            panel?.setAppearanceOpen(true, animated: false)
+        case .removed:
+            // Two controls out, so the tray's chips show.
+            for element in [OSCElement.lb, .rb] {
+                controls.select(element)
+                if !controls.layout.item(element).hidden { controls.toggleSelectedHidden() }
+            }
+            controls.select(.face)
         case .playing:
             // Hold a few controls down so the lit glass shows.
             controls.isTrying = true
@@ -386,9 +694,15 @@ final class OSCEditorViewController: UIViewController {
         }
     }
 
+    /// The `…` menu's switch between the night and day stand-in scenes.
+    private func sceneAction() -> UIAction {
+        UIAction(title: backdrop.bright ? "Night background" : "Day background",
+                 image: UIImage(systemName: backdrop.bright ? "moon.stars" : "sun.max")) { [weak self] _ in self?.toggleScene() }
+    }
+
     private func toggleScene() {
         backdrop.bright.toggle()
-        sceneButton.configuration?.image = UIImage(systemName: backdrop.bright ? "moon.stars.fill" : "sun.max.fill")
+        panel?.extraActions = [sceneAction()]
     }
 
     func close() {

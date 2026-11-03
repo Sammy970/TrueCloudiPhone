@@ -73,9 +73,26 @@ struct OSCLayout: Codable, Equatable {
     var opacity = 0.9
     /// Keyed by `OSCElement.rawValue`; a missing entry means "the default position".
     var items: [String: OSCItem] = [:]
+    /// Touch anywhere on the left or right half of the screen and a stick appears under the finger (Steam Link's
+    /// "dynamic joysticks"). The fixed sticks are hidden while this is on.
+    var floatingSticks = false
+    /// Seconds without a touch before the controls fade out; 0 keeps them always visible.
+    var fadeAfter = 0.0
 
     static let opacityRange = 0.3...1.0
     static let scaleRange = 0.6...1.8
+    static let fadeChoices: [Double] = [0, 5, 10, 20]
+
+    init() {}
+
+    /// Layouts saved before these fields existed have no keys for them; decoding must not throw away the player's layout.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 0.9
+        items = try c.decodeIfPresent([String: OSCItem].self, forKey: .items) ?? [:]
+        floatingSticks = try c.decodeIfPresent(Bool.self, forKey: .floatingSticks) ?? false
+        fadeAfter = try c.decodeIfPresent(Double.self, forKey: .fadeAfter) ?? 0
+    }
 
     func item(_ element: OSCElement) -> OSCItem {
         items[element.rawValue] ?? OSCItem(x: element.defaultPosition.x, y: element.defaultPosition.y)

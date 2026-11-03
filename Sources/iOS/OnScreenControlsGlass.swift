@@ -94,6 +94,10 @@ private enum OSCHold {
     /// Touched next to a control without hitting it: swallowed so it doesn't move the cursor.
     case dead
     case drag(OSCElement, grab: CGSize)
+    /// Editing: a finger on empty space. It moves nothing, but a second finger can pair with it to pinch.
+    case blank
+    /// Editing: one of the two fingers of a pinch (see `editPinchMoved`).
+    case pinch
 }
 
 // MARK: - Controls
@@ -125,6 +129,9 @@ final class TrueCloudOnScreenControls: NSObject {
     private let root = CALayer()
     private let selection = CAShapeLayer()
     private let guides = CAShapeLayer()
+    /// While arranging: a faint blue wash over the whole screen, and a red outline on controls that overlap.
+    private let tint = CALayer()
+    private let overlaps = CAShapeLayer()
     private var layers: [OSCPart: CALayer] = [:]
     private var rects: [OSCPart: CGRect] = [:]
     private var lastBounds = CGRect.zero
@@ -140,11 +147,25 @@ final class TrueCloudOnScreenControls: NSObject {
     private lazy var haptic = UIImpactFeedbackGenerator(style: .light)
     private var editObserver: NSObjectProtocol?
 
+    // Floating sticks: where each side's stick was spawned by a touch (left = true). Present only while a finger holds it.
+    private var floatingCenter: [Bool: CGPoint] = [:]
+
+    // Fade after idle
+    /// Whether the idle fade has hidden the gamepad. `relayout` and `setOpacity` honour it so they don't un-fade it.
+    private(set) var isFaded = false
+    private var fadeTask: Task<Void, Never>?
+    private var lastTouch: CFTimeInterval = 0
+
     // Editing
     private(set) var isEditing = false
     private(set) var selected: OSCElement?
     /// Called when the selection or layout changes, so an editor panel can refresh.
     var onChange: (() -> Void)?
+    /// Called as a control is dragged while arranging: the element and the finger's position in the controls' view, then
+    /// (nil, nil) when the drag ends or turns into a pinch. Only fires once the finger has moved a few points, so a tap doesn't.
+    var onDragChange: ((_ element: OSCElement?, _ location: CGPoint?) -> Void)?
+    /// Where the editor's bin is, in the controls' view. Lifting a dragged control with the finger inside it removes the control.
+    var binFrame: CGRect?
     /// In-stream editing: the panel's own window above the stream. A window of its own keeps the
     /// stream view's gesture recognizers from stealing the panel's touches.
     private var panelWindow: PanelWindow?
@@ -169,6 +190,12 @@ final class TrueCloudOnScreenControls: NSObject {
         root.zPosition = 1000
         selection.zPosition = 1001
         guides.zPosition = 1001
+        tint.zPosition = 999  // under the controls, over the stream
+        tint.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.14).cgColor
+        overlaps.zPosition = 1002
+        overlaps.strokeColor = UIColor.systemRed.withAlphaComponent(0.95).cgColor
+        overlaps.lineWidth = 1.4
+        overlaps.fillColor = nil
         selection.fillColor = OSCGlass.blue.withAlphaComponent(0.14).cgColor
         selection.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
         selection.lineDashPattern = [7, 5]
@@ -186,9 +213,12 @@ final class TrueCloudOnScreenControls: NSObject {
 
     deinit {
         if let editObserver { NotificationCenter.default.removeObserver(editObserver) }
+        fadeTask?.cancel()
         root.removeFromSuperlayer()
         selection.removeFromSuperlayer()
         guides.removeFromSuperlayer()
+        tint.removeFromSuperlayer()
+        overlaps.removeFromSuperlayer()
     }
 
     @objc(show)
@@ -202,6 +232,7 @@ final class TrueCloudOnScreenControls: NSObject {
             }
         }
         relayout(force: true)
+        wake()
     }
 
     @objc(setLevel:)
@@ -276,8 +307,13 @@ final class TrueCloudOnScreenControls: NSObject {
     /// While arranging, every control shows (hidden ones faintly); otherwise only what the level and the player allow.
     private var isArranging: Bool { isEditing && !isTrying }
 
+    /// Floating sticks replace the fixed ones while playing (the editor still arranges the fixed ones).
+    private var isFloating: Bool { layout.floatingSticks && !isArranging }
+
     private func isShown(_ element: OSCElement) -> Bool {
         if isArranging { return true }
+        // A floating stick exists only while its finger is down.
+        if isFloating, element == .leftStick || element == .rightStick, floatingCenter[element == .leftStick] == nil { return false }
         return OSCElement.visible(for: level).contains(element) && !layout.item(element).hidden
     }
 
@@ -293,10 +329,14 @@ final class TrueCloudOnScreenControls: NSObject {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         root.frame = view.bounds
-        root.opacity = Float(layout.opacity)
+        // The editor always shows the controls at full opacity; otherwise an idle fade stays faded.
+        if isEditing || layout.fadeAfter <= 0 { isFaded = false }
+        if isEditing { fadeTask?.cancel(); fadeTask = nil }
+        root.opacity = isFaded ? 0 : Float(layout.opacity)
         rects.removeAll()
         for element in OSCElement.allCases {
-            let c = center(of: element, in: view)
+            let isStick = element == .leftStick || element == .rightStick
+            let c = (isFloating && isStick ? floatingCenter[element == .leftStick] : nil) ?? center(of: element, in: view)
             let f = sizeFactor(view, item: layout.item(element))
             for (part, r) in partRects(element, factor: f) { rects[part] = r.offsetBy(dx: c.x, dy: c.y) }
             if element == .leftStick || element == .rightStick, let base = rects[element == .leftStick ? .leftBase : .rightBase] {
@@ -310,6 +350,7 @@ final class TrueCloudOnScreenControls: NSObject {
         for part in OSCPart.allCases where only == nil || part.element == only { update(part) }
         updateSelection()
         CATransaction.commit()
+        if !isEditing, fadeTask == nil { armFade() }
     }
 
     private func update(_ part: OSCPart) {
@@ -418,6 +459,8 @@ final class TrueCloudOnScreenControls: NSObject {
 
     @objc(handleTouchDownEvent:)
     func handleTouchDownEvent(_ touches: Set<UITouch>) -> Bool {
+        // Any touch, consumed or not, brings a faded gamepad back (after it's been processed, so `holds` is current).
+        defer { wake() }
         guard let view else { return false }
         relayout()
         var consumed = false
@@ -427,6 +470,7 @@ final class TrueCloudOnScreenControls: NSObject {
 
     @objc(handleTouchMovedEvent:)
     func handleTouchMovedEvent(_ touches: Set<UITouch>) -> Bool {
+        defer { wake(rearm: false) }  // moves arrive at display rate; only note the time
         guard let view else { return false }
         var consumed = false
         for touch in touches where pointerMoved(Self.id(touch), at: touch.location(in: view)) { consumed = true }
@@ -435,6 +479,7 @@ final class TrueCloudOnScreenControls: NSObject {
 
     @objc(handleTouchUpEvent:)
     func handleTouchUpEvent(_ touches: Set<UITouch>) -> Bool {
+        defer { wake() }
         var consumed = false
         for touch in touches where pointerUp(Self.id(touch)) { consumed = true }
         return consumed
@@ -491,13 +536,67 @@ final class TrueCloudOnScreenControls: NSObject {
             holds[id] = .dead
             return true
         }
+        if isFloating, let view {
+            // Empty screen: the touch drives a stick under the finger instead of the mouse.
+            let left = p.x < view.bounds.midX
+            let element: OSCElement = left ? .leftStick : .rightStick
+            guard OSCElement.visible(for: level).contains(element), !layout.item(element).hidden else { return false }
+            // A second finger on a side whose stick is already out is swallowed, so it neither moves that stick nor clicks the stream.
+            guard floatingCenter[left] == nil else { holds[id] = .dead; return true }
+            spawnFloatingStick(left: left, at: p, in: view)
+            holds[id] = .stick(left: left)
+            if let last = lastStickRelease[left], Date().timeIntervalSince(last) < Self.stickClickWindow {
+                output?.press(left ? OSCFlag.ls : OSCFlag.rs)
+            }
+            dragStick(left: left, to: p)
+            output?.commit()
+            return true
+        }
         return false
     }
+
+    /// Puts a stick's base under the finger (kept wholly inside the control area) with the knob at its centre.
+    private func spawnFloatingStick(left: Bool, at p: CGPoint, in view: UIView) {
+        let element: OSCElement = left ? .leftStick : .rightStick
+        let f = sizeFactor(view, item: layout.item(element))
+        let area = limit(in: view)
+        let extent = union(partRects(element, factor: f))
+        var c = p
+        c.x = min(max(c.x, area.minX - extent.minX), area.maxX - extent.maxX)
+        c.y = min(max(c.y, area.minY - extent.minY), area.maxY - extent.maxY)
+        floatingCenter[left] = c
+        knobOffset[left] = .zero
+        let inner = Self.stickInner * f
+        let basePart: OSCPart = left ? .leftBase : .rightBase, knobPart: OSCPart = left ? .leftKnob : .rightKnob
+        rects[basePart] = extent.offsetBy(dx: c.x, dy: c.y)
+        rects[knobPart] = CGRect(x: c.x - inner / 2, y: c.y - inner / 2, width: inner, height: inner)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for part in [basePart, knobPart] {
+            layers[part]?.removeAllAnimations()  // a fade-out from the last release may still be running
+            update(part)
+        }
+        CATransaction.commit()
+    }
+
+    /// The stick goes away with the finger: a quick fade, then it's hidden (`isShown` is false once the centre is gone).
+    private func removeFloatingStick(left: Bool) {
+        floatingCenter[left] = nil
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.15)
+        layers[left ? .leftBase : .rightBase]?.opacity = 0
+        layers[left ? .leftKnob : .rightKnob]?.opacity = 0
+        CATransaction.commit()
+    }
+
+    /// Whether a floating stick is out on a side, for the self-test.
+    func hasFloatingStick(left: Bool) -> Bool { floatingCenter[left] != nil }
 
     func pointerMoved(_ id: Int, at p: CGPoint) -> Bool {
         guard let hold = holds[id] else { return false }
         switch hold {
-        case .drag: return editMoved(id, at: p)
+        case .drag, .blank: return editMoved(id, at: p)
+        case .pinch: return editPinchMoved(id, at: p)
         case .stick(let left):
             dragStick(left: left, to: p)
             output?.commit()
@@ -513,8 +612,12 @@ final class TrueCloudOnScreenControls: NSObject {
     func pointerUp(_ id: Int) -> Bool {
         guard let hold = holds.removeValue(forKey: id) else { return false }
         switch hold {
-        case .drag:
-            editUp()
+        case .drag(let element, _):
+            editUp(id, dropped: element)
+        case .blank:
+            editUp(id)
+        case .pinch:
+            editPinchUp(id)
         case .button(let part):
             switch part {
             case .ls, .rs:
@@ -536,6 +639,7 @@ final class TrueCloudOnScreenControls: NSObject {
             if left { output?.leftStick(x: 0, y: 0); output?.release(OSCFlag.ls) } else { output?.rightStick(x: 0, y: 0); output?.release(OSCFlag.rs) }
             lastStickRelease[left] = Date()
             output?.commit()
+            if floatingCenter[left] != nil { removeFloatingStick(left: left) }
         case .dead:
             break
         }
@@ -545,6 +649,7 @@ final class TrueCloudOnScreenControls: NSObject {
     /// Lets go of everything, e.g. when the controls hide or the stream ends mid-press.
     func releaseAll() {
         for id in Array(holds.keys) { _ = pointerUp(id) }
+        floatingCenter.removeAll()
     }
 
     private func flag(for part: OSCPart) -> Int32 {
@@ -578,7 +683,8 @@ final class TrueCloudOnScreenControls: NSObject {
         func consider(_ part: OSCPart, _ distance: CGFloat) {
             if best == nil || distance < best!.1 { best = (part, distance) }
         }
-        for (part, rect) in rects where isShown(part.element) && !part.isKnob {
+        // A floating stick isn't a target: a finger on it is the one already driving it.
+        for (part, rect) in rects where isShown(part.element) && !part.isKnob && !(isFloating && part.element.isStick) {
             let c = CGPoint(x: rect.midX, y: rect.midY)
             let d = hypot(p.x - c.x, p.y - c.y)
             switch part {
@@ -600,7 +706,7 @@ final class TrueCloudOnScreenControls: NSObject {
     }
 
     private func isInDeadZone(_ p: CGPoint) -> Bool {
-        for element in OSCElement.allCases where isShown(element) {
+        for element in OSCElement.allCases where isShown(element) && !(isFloating && element.isStick) {
             if frame(of: element).insetBy(dx: -Self.deadZonePadding, dy: -Self.deadZonePadding).contains(p) { return true }
         }
         return false
@@ -675,6 +781,16 @@ final class TrueCloudOnScreenControls: NSObject {
 
     private func updateSelection() {
         guard let view else { return }
+        if isArranging {
+            if tint.superlayer == nil { view.layer.addSublayer(tint) }
+            if overlaps.superlayer == nil { view.layer.addSublayer(overlaps) }
+            tint.frame = view.bounds
+            overlaps.path = overlapPath()
+        } else {
+            tint.removeFromSuperlayer()
+            overlaps.removeFromSuperlayer()
+            overlaps.path = nil
+        }
         if isArranging, let selected, !frame(of: selected).isNull {
             if selection.superlayer == nil { view.layer.addSublayer(selection) }
             let f = frame(of: selected).insetBy(dx: -10, dy: -10)
@@ -685,8 +801,54 @@ final class TrueCloudOnScreenControls: NSObject {
         if guides.superlayer == nil, isEditing { view.layer.addSublayer(guides) }
     }
 
-    private func editDown(_ id: Int, at p: CGPoint) -> Bool {
-        guard holds.isEmpty else { return true }
+    /// Outlines for every pair of shown controls that overlap (by more than a few points, since the shoulder gems'
+    /// boxes touch at their default spots). Recomputed whenever the layout is.
+    private func overlapPath() -> CGPath {
+        let shown = OSCElement.allCases.filter { isShown($0) && !layout.item($0).hidden && !frame(of: $0).isNull }
+        // Compare the buttons themselves, not the clusters' bounding boxes: the empty corners of the A B X Y
+        // diamond or the D-pad cross would otherwise flag controls that visibly don't touch.
+        func buttons(_ element: OSCElement) -> [CGRect] {
+            rects.filter { $0.key.element == element && !$0.key.isKnob }.map { $0.value.insetBy(dx: 3, dy: 3) }
+        }
+        var marked: Set<OSCElement> = []
+        for (i, a) in shown.enumerated() {
+            let pa = buttons(a)
+            for b in shown[(i + 1)...] where pa.contains(where: { r in buttons(b).contains { $0.intersects(r) } }) {
+                marked.insert(a)
+                marked.insert(b)
+            }
+        }
+        let path = UIBezierPath()
+        for element in marked { path.append(UIBezierPath(roundedRect: frame(of: element).insetBy(dx: -4, dy: -4), cornerRadius: 12)) }
+        return path.cgPath
+    }
+
+    /// Records the bin's frame from a view of the editor chrome (which may be in another window) in the controls' view,
+    /// with some slack so the finger doesn't have to be exact.
+    func setBin(_ rect: CGRect, in source: UIView) {
+        binFrame = view.map { $0.convert(rect, from: source).insetBy(dx: -16, dy: -16) }
+    }
+
+    /// Two fingers resizing a control while arranging. Kept from raw pointer ids because the stream view has
+    /// its own recognizers, so a UIPinchGestureRecognizer wouldn't see these touches.
+    private struct OSCPinch {
+        var first: Int, second: Int
+        var points: [Int: CGPoint]
+        var element: OSCElement
+        var startDistance: CGFloat
+        var startScale: Double
+    }
+
+    private var pinch: OSCPinch?
+    /// Last position of each finger that went down while arranging, so a second finger can pair with it.
+    private var editPoints: [Int: CGPoint] = [:]
+    /// The dragged control as it was when the finger landed, where it goes back to if it is dropped on the bin.
+    private var dragOrigin: OSCItem?
+    private var dragDown: CGPoint?
+    private var dragReported = false
+
+    /// The control under a point, with a little slack for a finger; where frames overlap, the nearest centre wins.
+    private func editTarget(at p: CGPoint) -> OSCElement? {
         var best: (OSCElement, CGFloat)?
         for element in OSCElement.allCases {
             let f = frame(of: element).insetBy(dx: -10, dy: -10)
@@ -694,17 +856,87 @@ final class TrueCloudOnScreenControls: NSObject {
             let d = hypot(p.x - f.midX, p.y - f.midY)
             if best == nil || d < best!.1 { best = (element, d) }
         }
-        guard let element = best?.0 else {
+        return best?.0
+    }
+
+    private func editDown(_ id: Int, at p: CGPoint) -> Bool {
+        guard holds.isEmpty else { return editSecondFinger(id, at: p) }
+        editPoints[id] = p
+        guard let element = editTarget(at: p) else {
             select(nil)
+            holds[id] = .blank
             return true
         }
         let c = CGPoint(x: frame(of: element).midX, y: frame(of: element).midY)
         holds[id] = .drag(element, grab: CGSize(width: p.x - c.x, height: p.y - c.y))
+        dragOrigin = layout.item(element)
+        dragDown = p
+        dragReported = false
         select(element)
         return true
     }
 
+    /// A finger landing while another is down: with exactly one drag (or empty-space touch) already going it
+    /// starts a pinch; anything else is swallowed until it lifts.
+    private func editSecondFinger(_ id: Int, at p: CGPoint) -> Bool {
+        guard pinch == nil, holds.count == 1, let entry = holds.first, let p1 = editPoints[entry.key] else {
+            holds[id] = .dead
+            return true
+        }
+        let element: OSCElement
+        switch entry.value {
+        case .drag(let dragged, _): element = dragged
+        case .blank:
+            // No selection to resize: take the control between the two fingers.
+            guard let under = editTarget(at: CGPoint(x: (p1.x + p.x) / 2, y: (p1.y + p.y) / 2)) else {
+                holds[id] = .dead
+                return true
+            }
+            element = under
+        default:
+            holds[id] = .dead
+            return true
+        }
+        // Fingers that start nearly together would make the ratio wild, so the baseline has a floor.
+        let distance = max(hypot(p.x - p1.x, p.y - p1.y), 40)
+        pinch = OSCPinch(first: entry.key, second: id, points: [entry.key: p1, id: p], element: element,
+                         startDistance: distance, startScale: layout.item(element).scale)
+        holds[entry.key] = .pinch
+        holds[id] = .pinch
+        guides.path = nil
+        if dragReported {
+            dragReported = false
+            onDragChange?(nil, nil)
+        }
+        if selected != element { select(element) }
+        return true
+    }
+
+    private func editPinchMoved(_ id: Int, at p: CGPoint) -> Bool {
+        guard var pin = pinch, pin.points[id] != nil else { return true }
+        pin.points[id] = p
+        pinch = pin
+        guard let a = pin.points[pin.first], let b = pin.points[pin.second] else { return true }
+        let before = layout.item(pin.element).scale
+        setSelectedScale(pin.startScale * Double(hypot(a.x - b.x, a.y - b.y) / pin.startDistance))
+        if layout.item(pin.element).scale != before { onChange?() }
+        return true
+    }
+
+    /// One finger of a pinch lifted: save, and park the other until it lifts so it doesn't start dragging.
+    private func editPinchUp(_ id: Int) {
+        editPoints[id] = nil
+        guard let pin = pinch else { return }
+        pinch = nil
+        let other = id == pin.first ? pin.second : pin.first
+        editPoints[other] = nil
+        if holds[other] != nil { holds[other] = .dead }
+        persistLayout()
+        onChange?()
+    }
+
     private func editMoved(_ id: Int, at p: CGPoint) -> Bool {
+        editPoints[id] = p
         guard case .drag(let element, let grab)? = holds[id], let view else { return true }
         let area = limit(in: view)
         let f = sizeFactor(view, item: layout.item(element))
@@ -736,11 +968,31 @@ final class TrueCloudOnScreenControls: NSObject {
         if let snapY { line.move(to: CGPoint(x: area.minX, y: snapY)); line.addLine(to: CGPoint(x: area.maxX, y: snapY)) }
         guides.path = line.cgPath
         relayout(force: true)
+        if !dragReported, let dragDown, hypot(p.x - dragDown.x, p.y - dragDown.y) > 8 { dragReported = true }
+        if dragReported { onDragChange?(element, p) }
         return true
     }
 
-    private func editUp() {
+    /// `dropped` is the control this finger was dragging. Lifted with the finger on the bin, it is removed (and goes back
+    /// to where it was, so putting it back from the tray doesn't land it on the bin).
+    private func editUp(_ id: Int, dropped: OSCElement? = nil) {
+        let last = editPoints[id]
+        editPoints[id] = nil
         guides.path = nil
+        let wasDragged = dragReported
+        dragReported = false
+        if wasDragged { onDragChange?(nil, nil) }
+        if wasDragged, let dropped, let last, let binFrame, binFrame.contains(last), !layout.item(dropped).hidden {
+            var item = layout.item(dropped)
+            if let origin = dragOrigin { item.x = origin.x; item.y = origin.y }
+            item.hidden = true
+            layout.set(dropped, item)
+            OSCLayoutStore.save(layout)
+            relayout(force: true)
+            haptic.impactOccurred(intensity: 0.9)
+            select(nil)
+            return
+        }
         OSCLayoutStore.save(layout)
         onChange?()
     }
@@ -769,13 +1021,109 @@ final class TrueCloudOnScreenControls: NSObject {
         onChange?()
     }
 
+    /// The controls the player removed that this level could ever show: the tray's contents.
+    var hiddenElements: [OSCElement] {
+        let allowed = OSCElement.visible(for: level)
+        return OSCElement.allCases.filter { allowed.contains($0) && layout.item($0).hidden }
+    }
+
+    /// Puts a removed control back and selects it. It keeps its saved spot unless that now sits on another
+    /// control (the player may have filled the gap), in which case it goes back to its default position.
+    func restore(_ element: OSCElement) {
+        var item = layout.item(element)
+        guard item.hidden else { return }
+        item.hidden = false
+        let allowed = OSCElement.visible(for: level)
+        let mine = frame(of: element)
+        let covered = !mine.isNull && OSCElement.allCases.contains { other in
+            other != element && allowed.contains(other) && !layout.item(other).hidden
+                && mine.intersects(frame(of: other).insetBy(dx: 4, dy: 4))
+        }
+        if covered {
+            item.x = element.defaultPosition.x
+            item.y = element.defaultPosition.y
+        }
+        layout.set(element, item)
+        OSCLayoutStore.save(layout)
+        relayout(force: true)
+        select(element)
+    }
+
     /// Opacity is a single layer property, so nothing is redrawn; it's saved by `persistLayout()`.
     func setOpacity(_ opacity: Double) {
         layout.opacity = min(max(opacity, OSCLayout.opacityRange.lowerBound), OSCLayout.opacityRange.upperBound)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        root.opacity = Float(layout.opacity)
+        if !isFaded { root.opacity = Float(layout.opacity) }
         CATransaction.commit()
+    }
+
+    /// Floating sticks on or off (the Controls panel's switch). Saved at once; the runtime reads `layout.floatingSticks`.
+    func setFloatingSticks(_ on: Bool) {
+        guard on != layout.floatingSticks else { return }
+        releaseAll()
+        layout.floatingSticks = on
+        OSCLayoutStore.save(layout)
+        relayout(force: true)
+        onChange?()
+    }
+
+    /// Seconds of idle before the controls fade (0 = never). Saved at once; the runtime reads `layout.fadeAfter`.
+    func setFadeAfter(_ seconds: Double) {
+        guard seconds != layout.fadeAfter else { return }
+        layout.fadeAfter = seconds
+        OSCLayoutStore.save(layout)
+        wake()  // restores full opacity when it's now 0, and restarts the idle timer
+        onChange?()
+    }
+
+    // MARK: Fade after idle
+
+    /// Notes a touch (or a settings change): brings a faded gamepad back quickly and restarts the idle timer.
+    /// `rearm: false` is for touch moves, which only need the time noted.
+    func wake(rearm: Bool = true) {
+        lastTouch = CACurrentMediaTime()
+        if isFaded {
+            isFaded = false
+            animateRootOpacity(Float(layout.opacity), duration: 0.15)
+        }
+        if rearm || fadeTask == nil { armFade() }
+    }
+
+    /// Waits out the idle time, then fades. While a finger is held the wait just repeats, so a long hold never fades it.
+    private func armFade() {
+        fadeTask?.cancel()
+        fadeTask = nil
+        guard layout.fadeAfter > 0, visible, !isEditing, !isFaded else { return }
+        let wait = holds.isEmpty ? max(0.05, lastTouch + layout.fadeAfter - CACurrentMediaTime()) : layout.fadeAfter
+        fadeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            self.fadeTask = nil
+            if self.holds.isEmpty, CACurrentMediaTime() - self.lastTouch >= self.layout.fadeAfter { self.fadeOut() } else { self.armFade() }
+        }
+    }
+
+    /// Fades the whole gamepad out. Does nothing while a finger is held, while editing, or when fading is off.
+    func fadeOut() {
+        guard layout.fadeAfter > 0, visible, !isEditing, holds.isEmpty, !isFaded else { return }
+        isFaded = true
+        animateRootOpacity(0, duration: 0.4)
+    }
+
+    /// Sets the model value at once and animates from where the layer currently looks, so a half-done fade reverses smoothly.
+    private func animateRootOpacity(_ value: Float, duration: CFTimeInterval) {
+        let from = root.presentation()?.opacity ?? root.opacity
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        root.opacity = value
+        CATransaction.commit()
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = from
+        animation.toValue = value
+        animation.duration = duration
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        root.add(animation, forKey: "idleFade")
     }
 
     func resetLayout() {
@@ -794,7 +1142,7 @@ final class TrueCloudOnScreenControls: NSObject {
 
     // MARK: In-stream editing
 
-    /// Shows the editor panel over the running stream. The stream sees nothing while it's open.
+    /// Shows the editor chrome over the running stream. The stream sees nothing while it's open.
     private func beginStreamEditing() {
         guard !isEditing, let scene = view?.window?.windowScene else { return }
         setEditing(true)
@@ -803,11 +1151,12 @@ final class TrueCloudOnScreenControls: NSObject {
         let panel = OSCEditorPanel(controls: self, showsTryIt: false) { [weak self] in self?.endStreamEditing() }
         panel.translatesAutoresizingMaskIntoConstraints = false
         host.view.addSubview(panel)
+        // The chrome fills the window and passes touches through everywhere except on its own pieces (see `PanelWindow`).
         NSLayoutConstraint.activate([
-            panel.centerXAnchor.constraint(equalTo: host.view.centerXAnchor),
-            panel.topAnchor.constraint(equalTo: host.view.safeAreaLayoutGuide.topAnchor, constant: 6),
-            panel.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
-            panel.widthAnchor.constraint(lessThanOrEqualTo: host.view.widthAnchor, constant: -40),
+            panel.topAnchor.constraint(equalTo: host.view.topAnchor),
+            panel.bottomAnchor.constraint(equalTo: host.view.bottomAnchor),
+            panel.leadingAnchor.constraint(equalTo: host.view.leadingAnchor),
+            panel.trailingAnchor.constraint(equalTo: host.view.trailingAnchor),
         ])
         let window = PanelWindow(windowScene: scene)
         window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 2)
@@ -825,12 +1174,16 @@ final class TrueCloudOnScreenControls: NSObject {
     }
 }
 
-/// Takes touches on the editor panel only; everything else falls through to the stream below.
+/// Takes touches on the editor chrome's pieces only; everything else falls through to the stream below.
 private final class PanelWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = super.hitTest(point, with: event)
         return hit === rootViewController?.view ? nil : hit
     }
+}
+
+private extension OSCElement {
+    var isStick: Bool { self == .leftStick || self == .rightStick }
 }
 
 private extension OSCPart {

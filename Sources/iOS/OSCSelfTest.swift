@@ -77,6 +77,73 @@ enum OSCSelfTest {
         _ = c.pointerUp(14)
         check("Touch on empty screen goes through", !c.pointerDown(15, at: CGPoint(x: 437, y: 150)))
 
+        // Floating sticks: empty-screen touches drive the sticks under the finger instead of the stream
+        /// An empty spot (not on a control, not in a dead zone) in one half, nearest a target, found with floating off.
+        func emptySpot(left: Bool) -> CGPoint {
+            let target = CGPoint(x: left ? 220 : 660, y: 200)
+            var best = target, bestDistance = CGFloat.greatestFiniteMagnitude
+            for x in stride(from: left ? 40 : 450, through: left ? 420 : 840, by: 10) {
+                for y in stride(from: 60, through: 340, by: 10) {
+                    let p = CGPoint(x: x, y: y)
+                    let used = c.pointerDown(900, at: p)
+                    if used { _ = c.pointerUp(900) }
+                    let d = hypot(p.x - target.x, p.y - target.y)
+                    if !used, d < bestDistance { best = p; bestDistance = d }
+                }
+            }
+            return best
+        }
+        let leftEmpty = emptySpot(left: true), rightEmpty = emptySpot(left: false)
+        let fixedLeftStick = at(.leftBase)
+        check("Floating off: empty touch gives no stick output", !c.pointerDown(30, at: leftEmpty) && out.lx == 0 && !c.hasFloatingStick(left: true))
+        c.setFloatingSticks(true)
+        let spawnedDown = c.pointerDown(31, at: leftEmpty)
+        let spawnedAt = c.partCenter(.leftBase) ?? .zero
+        let underFinger = abs(spawnedAt.x - leftEmpty.x) < 0.5 && abs(spawnedAt.y - leftEmpty.y) < 0.5
+        check("Floating: empty left touch is consumed and spawns the left stick under the finger",
+              spawnedDown && underFinger && c.hasFloatingStick(left: true) && !c.hasFloatingStick(left: false))
+        _ = c.pointerMoved(31, at: CGPoint(x: leftEmpty.x + 200, y: leftEmpty.y))
+        check("Floating: dragging the left stick moves only the left output", out.lx > 0x6000 && out.rx == 0 && out.ry == 0)
+        check("Floating: a second finger on the same side is swallowed", c.pointerDown(32, at: CGPoint(x: leftEmpty.x + 5, y: leftEmpty.y + 5)))
+        check("Floating: the second finger doesn't move the stick", out.lx > 0x6000)
+        _ = c.pointerUp(32)
+        check("Floating: both sides at once", c.pointerDown(33, at: rightEmpty) && c.hasFloatingStick(left: true) && c.hasFloatingStick(left: false))
+        _ = c.pointerMoved(33, at: CGPoint(x: rightEmpty.x, y: rightEmpty.y - 200))
+        check("Floating: dragging the right stick moves only the right output", out.ry > 0x6000 && out.lx > 0x6000)
+        _ = c.pointerUp(33)
+        check("Floating: lifting zeroes the right stick and removes it", out.rx == 0 && out.ry == 0 && !c.hasFloatingStick(left: false) && c.hasFloatingStick(left: true))
+        _ = c.pointerUp(31)
+        check("Floating: lifting zeroes the left stick and removes it", out.lx == 0 && out.ly == 0 && !c.hasFloatingStick(left: true))
+        check("Floating: a fixed control still wins and spawns nothing",
+              c.pointerDown(34, at: at(.a)) && out.flags & OSCFlag.a != 0 && !c.hasFloatingStick(left: false) && !c.hasFloatingStick(left: true))
+        _ = c.pointerUp(34)
+        check("Floating: the fixed stick isn't hit", c.pointerDown(35, at: CGPoint(x: fixedLeftStick.x + 50, y: fixedLeftStick.y)) && out.lx == 0)
+        _ = c.pointerUp(35)
+        check("Floating: releaseAll clears a floating stick", c.pointerDown(36, at: leftEmpty) && c.hasFloatingStick(left: true))
+        c.releaseAll()
+        check("Floating: releaseAll removed it", !c.hasFloatingStick(left: true) && out.lx == 0)
+        c.setFloatingSticks(false)
+        check("Floating off again: empty touch goes to the stream", !c.pointerDown(37, at: leftEmpty) && out.lx == 0)
+
+        // Fade after idle
+        c.setFadeAfter(5)
+        check("Fade: not faded to begin with", !c.isFaded)
+        _ = c.pointerDown(38, at: at(.a))
+        c.fadeOut()
+        check("Fade: never while a finger is held", !c.isFaded)
+        _ = c.pointerUp(38)
+        c.fadeOut()
+        check("Fade: fades when idle", c.isFaded)
+        check("Fade: a faded control still presses", c.pointerDown(39, at: at(.a)) && out.flags & OSCFlag.a != 0)
+        _ = c.pointerUp(39)
+        c.wake()
+        check("Fade: a touch brings it back", !c.isFaded)
+        c.fadeOut()
+        c.setFadeAfter(0)
+        check("Fade: turning it off restores the controls", !c.isFaded)
+        c.fadeOut()
+        check("Fade: off means never", !c.isFaded)
+
         // Levels
         c.setLevel(.simple)
         check("Simple level has no triggers", !c.pointerDown(16, at: at(.lt)) && out.lt == 0)
@@ -108,6 +175,7 @@ enum OSCSelfTest {
         check("Dragging moves the stick", after.x > before.x && after.y < before.y)
         check("The move is saved", OSCLayoutStore.load().item(.leftStick) == after)
         c.setSelectedScale(1.5)
+        c.persistLayout()  // the slider saves once the finger lifts, not on every tick
         check("Resizing is saved", OSCLayoutStore.load().item(.leftStick).scale == 1.5)
         c.select(.face)
         c.toggleSelectedHidden()
