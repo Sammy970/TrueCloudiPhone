@@ -157,7 +157,7 @@ index 963c433..4167d08 100644
  	<key>UIViewControllerBasedStatusBarAppearance</key>
  	<false/>
 diff --git a/Limelight/ViewControllers/MainFrameViewController.m b/Limelight/ViewControllers/MainFrameViewController.m
-index 169bb13..4ff0a61 100644
+index 169bb13..885df6e 100644
 --- a/Limelight/ViewControllers/MainFrameViewController.m
 +++ b/Limelight/ViewControllers/MainFrameViewController.m
 @@ -34,6 +34,7 @@
@@ -168,18 +168,20 @@ index 169bb13..4ff0a61 100644
  
  #include <Limelight.h>
  
-@@ -53,6 +54,10 @@ @implementation MainFrameViewController {
+@@ -53,6 +54,12 @@ @implementation MainFrameViewController {
      NSArray* _sortedAppList;
      NSCache* _boxArtCache;
      bool _background;
 +    // TrueCloud: address of the cloud PC to auto-launch "Desktop" on once its app list loads.
 +    NSString* _trueCloudLaunchAddress;
 +    BOOL _trueCloudShownOnLaunch;
++    BOOL _trueCloudPanelUp;
++    BOOL _trueCloudRetried;
 +    UIView* _trueCloudCover;
  #if TARGET_OS_TV
      UITapGestureRecognizer* _menuRecognizer;
  #endif
-@@ -63,8 +68,11 @@ - (void)startPairing:(NSString *)PIN {
+@@ -63,8 +70,11 @@ - (void)startPairing:(NSString *)PIN {
      // Needs to be synchronous to ensure the alert is shown before any potential
      // failure callback could be invoked.
      dispatch_sync(dispatch_get_main_queue(), ^{
@@ -192,7 +194,7 @@ index 169bb13..4ff0a61 100644
                                                          preferredStyle:UIAlertControllerStyleAlert];
          [self->_pairAlert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
              self->_pairAlert = nil;
-@@ -74,6 +82,9 @@ - (void)startPairing:(NSString *)PIN {
+@@ -74,6 +84,9 @@ - (void)startPairing:(NSString *)PIN {
              }];
          }]];
          [[self activeViewController] presentViewController:self->_pairAlert animated:YES completion:nil];
@@ -202,7 +204,7 @@ index 169bb13..4ff0a61 100644
      });
  }
  
-@@ -94,6 +105,7 @@ - (void)displayPairingFailureDialog:(NSString *)message {
+@@ -94,6 +107,7 @@ - (void)displayPairingFailureDialog:(NSString *)message {
  
  - (void)pairFailed:(NSString *)message {
      dispatch_async(dispatch_get_main_queue(), ^{
@@ -210,15 +212,43 @@ index 169bb13..4ff0a61 100644
          if (self->_pairAlert != nil) {
              [self->_pairAlert dismissViewControllerAnimated:YES completion:^{
                  [self displayPairingFailureDialog:message];
-@@ -105,6 +117,7 @@ - (void)pairFailed:(NSString *)message {
+@@ -105,6 +119,20 @@ - (void)pairFailed:(NSString *)message {
  
  - (void)pairSuccessful:(NSData*)serverCert {
      dispatch_async(dispatch_get_main_queue(), ^{
 +        [[NSNotificationCenter defaultCenter] postNotificationName:@"TrueCloudPairingEnded" object:nil];
++        // TrueCloud: Moonlight can drop its selected host while the pairing alert is up (the host list reset), and
++        // without it the cert isn't stored and the app list never loads. Reselect the cloud PC we're connecting to.
++        if (self->_selectedHost == nil && self->_trueCloudLaunchAddress != nil) {
++            @synchronized(hostList) {
++                for (TemporaryHost* candidate in hostList) {
++                    if ([self trueCloudHost:candidate matchesAddress:self->_trueCloudLaunchAddress]) {
++                        self->_selectedHost = candidate;
++                        break;
++                    }
++                }
++            }
++            NSLog(@"[TrueCloud] pairing done with no selected host; reselected %@", self->_selectedHost.name);
++        }
          // Store the cert from pairing with the host
          self->_selectedHost.serverCert = serverCert;
          
-@@ -938,6 +951,15 @@ - (void)viewDidLoad
+@@ -895,6 +923,14 @@ - (void)prepareForSegue:(UIStoryboardSegue *)segue sender:(id)sender {
+ }
+ 
+ - (void) showLoadingFrame:(void (^)(void))completion {
++    // TrueCloud: nothing of Moonlight's own should draw over the panel (a foreground refresh of the saved host
++    // would put a spinner on top of it for ten seconds).
++    if (_trueCloudPanelUp) {
++        if (completion) {
++            completion();
++        }
++        return;
++    }
+     [_loadingFrame showLoadingFrame:completion];
+ }
+ 
+@@ -938,6 +974,15 @@ - (void)viewDidLoad
      
      // Get callbacks associated with the viewController
      [self.revealViewController setDelegate:self];
@@ -234,7 +264,7 @@ index 169bb13..4ff0a61 100644
      
      // Disable bounce-back on reveal VC otherwise the settings will snap closed
      // if the user drags all the way off the screen opposite the settings pane.
-@@ -1109,7 +1131,28 @@ - (void)viewDidAppear:(BOOL)animated
+@@ -1109,7 +1154,30 @@ - (void)viewDidAppear:(BOOL)animated
      
      // Check for a pending shortcut action when appearing
      [self handlePendingShortcutAction];
@@ -244,12 +274,14 @@ index 169bb13..4ff0a61 100644
 +    // TrueCloud: open straight into the TrueCloud panel on launch. When the panel closes after
 +    // Play, it leaves the cloud PC's address for us (a notification would be lost, since
 +    // viewDidDisappear removes all of our observers while the panel covers us).
++    _trueCloudPanelUp = NO;
 +    if (!_trueCloudShownOnLaunch) {
 +        _trueCloudShownOnLaunch = YES;
 +        [self showTrueCloudAnimated:NO];
 +    } else {
 +        NSString* pending = ((NSString* (*)(id, SEL))objc_msgSend)(NSClassFromString(@"TrueCloudPanel"), NSSelectorFromString(@"takePendingConnectAddress"));
 +        if (pending != nil) {
++            _trueCloudRetried = NO;
 +            [self trueCloudConnectToAddress:pending];
 +        } else if (_trueCloudLaunchAddress == nil) {
 +            // Back from a stream: TrueCloud is the app's home, Moonlight only runs the connection.
@@ -264,7 +296,7 @@ index 169bb13..4ff0a61 100644
      [[NSNotificationCenter defaultCenter] addObserver: self
                                               selector: @selector(handleReturnToForeground)
                                                   name: UIApplicationDidBecomeActiveNotification
-@@ -1124,6 +1167,12 @@ - (void)viewDidAppear:(BOOL)animated
+@@ -1124,6 +1192,12 @@ - (void)viewDidAppear:(BOOL)animated
  - (void)viewWillAppear:(BOOL)animated
  {
      [super viewWillAppear:animated];
@@ -277,7 +309,7 @@ index 169bb13..4ff0a61 100644
      
      // We can get here on home press while streaming
      // since the stream view segues to us just before
-@@ -1142,6 +1191,10 @@ - (void)viewWillAppear:(BOOL)animated
+@@ -1142,6 +1216,10 @@ - (void)viewWillAppear:(BOOL)animated
  - (void)viewDidDisappear:(BOOL)animated
  {
      [super viewDidDisappear:animated];
@@ -288,7 +320,7 @@ index 169bb13..4ff0a61 100644
      
      // when discovery stops, we must create a new instance because
      // you cannot restart an NSOperation when it is finished
-@@ -1341,6 +1394,150 @@ - (void) updateAppsForHost:(TemporaryHost*)host {
+@@ -1341,6 +1419,230 @@ - (void) updateAppsForHost:(TemporaryHost*)host {
      
      [hostScrollView removeFromSuperview];
      [self.collectionView reloadData];
@@ -305,7 +337,17 @@ index 169bb13..4ff0a61 100644
 +        }
 +        if (desktop != nil) {
 +            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-+                [self appClicked:desktop view:nil];
++                // Play resumes a session that is already running, without Moonlight's Resume / Quit / Cancel menu.
++                [self->_appManager stopRetrieving];
++#if !TARGET_OS_TV
++                if (self->currentPosition != FrontViewPositionLeft) {
++                    [[self revealViewController] revealToggleAnimated:NO];
++                }
++#endif
++                TemporaryApp* running = [self findRunningApp:host];
++                NSLog(@"[TrueCloud] %@ %@", running != nil ? @"resuming" : @"launching", running != nil ? running.name : desktop.name);
++                [self prepareToStreamApp:running ?: desktop];
++                [self performSegueWithIdentifier:@"createStreamFrame" sender:nil];
 +            });
 +        }
 +    }
@@ -328,6 +370,16 @@ index 169bb13..4ff0a61 100644
 +        [self trueCloudHideCover];
 +        return;
 +    }
++    // At launch Moonlight re-checks its saved host behind a loading frame, presented on top of everything and
++    // dismissed about 10 s later (when the host turns out to be offline). A panel presented over that frame
++    // would be dismissed with it, so take the frame down first.
++    if ([_loadingFrame isShown]) {
++        [self hideLoadingFrame:^{
++            [self showTrueCloudAnimated:animated];
++        }];
++        return;
++    }
++    _trueCloudPanelUp = YES;
 +    UIViewController* controller = ((UIViewController* (*)(id, SEL))objc_msgSend)(panel, NSSelectorFromString(@"makeViewController"));
 +    [[self activeViewController] presentViewController:controller animated:animated completion:^{
 +        [self trueCloudHideCover];
@@ -385,6 +437,17 @@ index 169bb13..4ff0a61 100644
 +    _trueCloudCover = nil;
 +}
 +
++// The cloud PC didn't answer: say so, then go back to the panel.
++- (void) trueCloudFailedToReach:(NSString*)message {
++    _trueCloudLaunchAddress = nil;
++    [self trueCloudHideCover];
++    UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"Couldn't Reach Cloud PC" message:message preferredStyle:UIAlertControllerStyleAlert];
++    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
++        [self showTrueCloudAnimated:YES];
++    }]];
++    [[self activeViewController] presentViewController:alert animated:YES completion:nil];
++}
++
 +// Requested by the TrueCloud panel's Play button: add the cloud PC if needed, pair (the PIN is
 +// submitted automatically), then auto-launch "Desktop".
 +- (void) trueCloudConnectToAddress:(NSString*)address {
@@ -406,7 +469,54 @@ index 169bb13..4ff0a61 100644
 +    }
 +    if (existing != nil) {
 +        NSLog(@"[TrueCloud] using saved host %@ (state %d, pair state %d)", existing.name, existing.state, existing.pairState);
-+        [self hostClicked:existing view:self.view];
++        // The saved state is stale: discovery is stopped while the panel covers us, and the host was last seen
++        // offline if the PC was off. hostClicked turns a tap on a host that isn't online into a long press (a
++        // menu) or waits for discovery, so ask the PC itself first.
++        TemporaryHost* saved = existing;
++        [self showLoadingFrame:^{
++            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
++                // Plain HTTP (no pinned certificate): it answers with the PC's state and its HTTPS port in one go.
++                // With the certificate, Moonlight first looks up the HTTPS port itself, and a failure there
++                // reads as "Host is unreachable".
++                // Ask the gateway address Play was given: the saved host's own active address is the rig's private
++                // LAN address (192.168.0.x:47989), which only works inside TrueCloud's network.
++                HttpManager* hMan = [[HttpManager alloc] initWithAddress:address httpsPort:0 serverCert:nil];
++                ServerInfoResponse* serverInfoResp = [[ServerInfoResponse alloc] init];
++                [self->_discMan pauseDiscoveryForHost:saved];
++                [hMan executeRequestSynchronously:[HttpRequest requestForResponse:serverInfoResp withUrlRequest:[hMan newHttpServerInfoRequest:false]]];
++                [self->_discMan resumeDiscoveryForHost:saved];
++                NSLog(@"[TrueCloud] probing %@ → %@", address, [serverInfoResp isStatusOk] ? @"ok" : serverInfoResp.statusMessage);
++                dispatch_async(dispatch_get_main_queue(), ^{
++                    NSLog(@"[TrueCloud] saved host check → %@", [serverInfoResp isStatusOk] ? @"online" : serverInfoResp.statusMessage);
++                    [self hideLoadingFrame:^{
++                        if (![serverInfoResp isStatusOk]) {
++                            [self trueCloudFailedToReach:serverInfoResp.statusMessage];
++                            return;
++                        }
++                        // Don't copy this answer into the host: over plain HTTP the PC reports every client as
++                        // unpaired, which would make Moonlight pair again. hostClicked reads the real pair state over HTTPS.
++                        // The HTTPS port is the one thing to take from it: the saved host carries a stale default and
++                        // Moonlight would send its secure request to a port the gateway doesn't open.
++                        TemporaryHost* answered = [[TemporaryHost alloc] init];
++                        [serverInfoResp populateHost:answered];
++                        if (answered.httpsPort != 0) {
++                            saved.httpsPort = answered.httpsPort;
++                        }
++                        NSLog(@"[TrueCloud] https port %u", (unsigned)saved.httpsPort);
++                        // Stream and talk to the PC through the gateway, never through its private LAN address.
++                        saved.address = address;
++                        saved.activeAddress = address;
++                        saved.localAddress = nil;
++                        saved.state = StateOnline;
++                        // Moonlight's own record can say "paired" after the PC was unpaired (Unpair All, or a fresh
++                        // PC), and its fast path trusts it: the app list then fails with "not authorized". Make it
++                        // ask the PC, which pairs again by itself if it has to.
++                        saved.pairState = PairStateUnknown;
++                        [self hostClicked:saved view:self.view];
++                    }];
++                });
++            });
++        }];
 +        return;
 +    }
 +    NSLog(@"[TrueCloud] adding host %@", address);
@@ -418,12 +528,14 @@ index 169bb13..4ff0a61 100644
 +                    NSLog(@"[TrueCloud] discover %@ → %@", address, host != nil ? host.name : error);
 +                    [self hideLoadingFrame:^{
 +                        if (host == nil) {
-+                            self->_trueCloudLaunchAddress = nil;
-+                            UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"Couldn't Reach Cloud PC" message:error preferredStyle:UIAlertControllerStyleAlert];
-+                            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
-+                                [self showTrueCloudAnimated:YES];
-+                            }]];
-+                            [[self activeViewController] presentViewController:alert animated:YES completion:nil];
++                            // The PC is already saved under its other gateway address (a2 / a4). Discovery has just
++                            // merged this address into that host, so it matches now: go round once more.
++                            if ([error isEqualToString:@"Host information updated"] && !self->_trueCloudRetried) {
++                                self->_trueCloudRetried = YES;
++                                [self trueCloudConnectToAddress:address];
++                                return;
++                            }
++                            [self trueCloudFailedToReach:error];
 +                            return;
 +                        }
 +                        @synchronized(hostList) {
