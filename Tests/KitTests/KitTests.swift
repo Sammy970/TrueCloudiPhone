@@ -56,6 +56,85 @@ final class FirestoreTests: XCTestCase {
         XCTAssertEqual(none.sunshineAddress, "h.example:35451")
     }
 
+    /// Every account has its own Moonlight port (the dashboard shows "<host>:<moonlight_port>"), so it must be read, not assumed.
+    func testMoonlightPortIsPerAccount() throws {
+        let forms: [[String: Any]] = [["integerValue": "36450"], ["stringValue": "36450"], ["doubleValue": 36450]]
+        for value in forms {
+            let p = try RigProfile.parse(document: ["fields": ["node": ["stringValue": "n"], "vmid": ["stringValue": "9"],
+                                                              "moonlight_ip": ["stringValue": "moonlight-a4.truecloud.in"],
+                                                              "moonlight_port": value]], uid: "u")
+            XCTAssertEqual(p.moonlightPort, 36450)
+            XCTAssertEqual(p.moonlightHost, "moonlight-a4.truecloud.in")
+            // No sunshine_port in the profile: it sits one above this account's Moonlight port, not the default's
+            XCTAssertEqual(p.sunshineAddress, "moonlight-a4.truecloud.in:36451")
+        }
+        // A stored sunshine_port still wins
+        let stored = try RigProfile.parse(document: ["fields": ["node": ["stringValue": "n"], "vmid": ["stringValue": "9"],
+                                                                "moonlight_ip": ["stringValue": "h.example"], "moonlight_port": ["integerValue": "36450"],
+                                                                "sunshine_port": ["stringValue": "h.example:40000"]]], uid: "u")
+        XCTAssertEqual(stored.moonlightPort, 36450)
+        XCTAssertEqual(stored.sunshineAddress, "h.example:40000")
+        // A profile without moonlight_port falls back to the defaults
+        let none = try RigProfile.parse(document: ["fields": ["node": ["stringValue": "n"], "vmid": ["stringValue": "9"],
+                                                              "moonlight_ip": ["stringValue": "h.example"]]], uid: "u")
+        XCTAssertEqual(none.moonlightPort, TCConstants.streamPort)
+        XCTAssertEqual(none.sunshineAddress, "h.example:\(TCConstants.sunshinePort)")
+        // And a profile built in code (previews, tests) defaults the same way
+        XCTAssertEqual(RigProfile(uid: "u", node: "n", vmid: 1, moonlightHost: "h.example").moonlightPort, TCConstants.streamPort)
+        XCTAssertEqual(RigProfile(uid: "u", node: "n", vmid: 1, moonlightHost: "h.example", moonlightPort: 36450).sunshineAddress, "h.example:36451")
+    }
+
+    /// Checks the dashboard applies before Start, matched by the client.
+    func testStartGateFacts() throws {
+        let base: [String: Any] = ["node": ["stringValue": "n"], "vmid": ["stringValue": "9"], "moonlight_ip": ["stringValue": "h.example"]]
+        // No provisioningStatus: the dashboard treats the rig as ready
+        let plain = try RigProfile.parse(document: ["fields": base], uid: "u")
+        XCTAssertEqual(plain.provisioningStatus, "ready")
+        XCTAssertTrue(plain.isProvisioned)
+        var building = base; building["provisioningStatus"] = ["stringValue": "cloning"]
+        XCTAssertFalse(try RigProfile.parse(document: ["fields": building], uid: "u").isProvisioned)
+        // Times are always milliseconds, as the dashboard divides them: 500 ms is not 500 hours
+        var tiny = base; tiny["time_remain"] = ["integerValue": "500"]; tiny["time_plan"] = ["integerValue": "21600000"]
+        let low = try RigProfile.parse(document: ["fields": tiny], uid: "u")
+        XCTAssertEqual(low.hoursRemaining, 500.0 / 3_600_000, accuracy: 1e-9)
+        XCTAssertFalse(low.hasEnoughTimeToStart)
+        // Expiry
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let past = RigProfile(uid: "u", node: "n", vmid: 1, moonlightHost: "h", expiration: now.addingTimeInterval(-60))
+        let future = RigProfile(uid: "u", node: "n", vmid: 1, moonlightHost: "h", expiration: now.addingTimeInterval(60))
+        let none = RigProfile(uid: "u", node: "n", vmid: 1, moonlightHost: "h")
+        XCTAssertTrue(past.isExpired(at: now))
+        XCTAssertFalse(future.isExpired(at: now))
+        XCTAssertFalse(none.isExpired(at: now))
+    }
+
+    /// The dashboard marks the account as paired after a PIN is accepted; only that field is written.
+    func testMarkPairedBeforeWritesOnlyThatField() async throws {
+        let t = MockTransport([("{}", 200), ("{}", 403)])
+        try await FirestoreClient(transport: t).markPairedBefore(uid: "u1", idToken: "TK")
+        let request = t.requests[0]
+        XCTAssertEqual(request.httpMethod, "PATCH")
+        XCTAssertTrue(request.url!.absoluteString.hasSuffix("/documents/users/u1?updateMask.fieldPaths=hasPairedBefore"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer TK")
+        XCTAssertEqual(String(decoding: request.httpBody!, as: UTF8.self), #"{"fields":{"hasPairedBefore":{"booleanValue":true}}}"#)
+        do { try await FirestoreClient(transport: t).markPairedBefore(uid: "u1", idToken: "TK"); XCTFail("403 should throw") }
+        catch { XCTAssertEqual(error as? TCError, .sessionExpired) }
+    }
+
+    /// GET /api/system-controls, as TrueCloud serves it (shape seen live).
+    func testSystemControls() async {
+        let live = #"{"supportEnabled":false,"startButtonEnabled":true,"startButtonDisabledReason":"paused","resetButtonEnabled":false}"#
+        let on = await RigAPI(transport: MockTransport([(live, 200)])).systemControls()
+        XCTAssertEqual(on, SystemControls(startEnabled: true, startDisabledReason: "paused"))
+        let off = await RigAPI(transport: MockTransport([(#"{"startButtonEnabled":false,"startButtonDisabledReason":"Maintenance"}"#, 200)])).systemControls()
+        XCTAssertEqual(off, SystemControls(startEnabled: false, startDisabledReason: "Maintenance"))
+        // A read that fails never blocks a start (the server enforces the pause anyway)
+        let failed = await RigAPI(transport: MockTransport([("oops", 500)])).systemControls()
+        XCTAssertNil(failed)
+        let garbage = await RigAPI(transport: MockTransport([("not json", 200)])).systemControls()
+        XCTAssertNil(garbage)
+    }
+
     func testMissingRigThrows() {
         XCTAssertThrowsError(try RigProfile.parse(document: ["fields": ["displayName": ["stringValue": "x"]]], uid: "u")) {
             XCTAssertEqual($0 as? TCError, .profileMissing)
@@ -248,5 +327,122 @@ final class LiveReadOnlyTests: XCTestCase {
         catch let e as TCError { if case .network = e { throw XCTSkip("offline") }; throw e }
         print("LIVE getVmStatus:", status)
         XCTAssertTrue(["running", "stopped"].contains(status.status))
+    }
+}
+
+// MARK: - Account extras: activity log, payments, traffic, plan end date
+
+final class AccountTests: XCTestCase {
+    /// `vm_logs/<vmid>-<uid>` as Firestore returns it.
+    static let activityDoc = """
+    {"fields":{"vmid":{"integerValue":"754"},"userId":{"stringValue":"u1"},"entries":{"arrayValue":{"values":[
+      {"mapValue":{"fields":{"id":{"stringValue":"a"},"type":{"stringValue":"start"},"status":{"stringValue":"Success: Start command sent"},
+        "timestamp":{"timestampValue":"2026-11-04T17:42:58.100Z"},"clientIp":{"stringValue":"203.0.113.9"}}}},
+      {"mapValue":{"fields":{"id":{"stringValue":"b"},"type":{"stringValue":"shutdown"},"status":{"stringValue":"Timed out waiting for stop status"},
+        "timestamp":{"timestampValue":"2026-11-04T18:00:52Z"},"clientIp":{"stringValue":"203.0.113.9"}}}},
+      {"mapValue":{"fields":{"id":{"stringValue":"c"},"type":{"stringValue":"system"},"status":{"stringValue":"Log initialized."},
+        "timestamp":{"timestampValue":"2026-11-01T09:00:00Z"}}}},
+      {"mapValue":{"fields":{"id":{"stringValue":"no-time"},"type":{"stringValue":"start"}}}}
+    ]}}}}
+    """
+
+    /// `transactions/<uid>`: a failed upgrade and a successful first plan.
+    static let paymentsDoc = """
+    {"fields":{"userId":{"stringValue":"u1"},"records":{"arrayValue":{"values":[
+      {"mapValue":{"fields":{"transactionId":{"stringValue":"t1"},"planName":{"stringValue":"Basic "},"amount":{"integerValue":"99900"},"currency":{"stringValue":"INR"},
+        "status":{"stringValue":"success"},"isUpgrade":{"booleanValue":false},"createdAt":{"timestampValue":"2026-10-31T19:34:42.682Z"},
+        "paymentId":{"stringValue":"p1"},"failureReason":{"nullValue":null},"plan":{"mapValue":{"fields":{"price":{"integerValue":"99900"}}}}}}},
+      {"mapValue":{"fields":{"transactionId":{"stringValue":"t2"},"planName":{"stringValue":"Regular"},"amount":{"integerValue":"159920"},"currency":{"stringValue":"INR"},
+        "status":{"stringValue":"failure"},"isUpgrade":{"booleanValue":true},"createdAt":{"timestampValue":"2026-10-31T21:12:00.697Z"},
+        "failureReason":{"stringValue":"Payment declined"}}}},
+      {"mapValue":{"fields":{"transactionId":{"stringValue":"t3"},"planName":{"stringValue":"Pro"},"status":{"stringValue":"refunded"}}}}
+    ]}}}}
+    """
+
+    private func json(_ text: String) -> [String: Any] { try! JSONSerialization.jsonObject(with: Data(text.utf8)) as! [String: Any] }
+
+    func testActivityLogParsesNewestFirstAndSkipsUndatedRows() {
+        let log = ActivityEntry.parse(document: json(Self.activityDoc))
+        XCTAssertEqual(log.map(\.id), ["b", "a", "c"])            // newest first; the row with no time is dropped
+        XCTAssertEqual(log[0].title, "Shutdown")
+        XCTAssertTrue(log[0].isFailure && !log[0].isSuccess)      // "Timed out waiting for stop status"
+        XCTAssertTrue(log[1].isSuccess && !log[1].isFailure)
+        XCTAssertFalse(log[2].isSuccess || log[2].isFailure)      // "Log initialized."
+        XCTAssertEqual(log[1].timestamp.timeIntervalSince1970, 1_793_814_178.1, accuracy: 0.01)
+    }
+
+    func testPaymentsParseNewestFirstWithAmountsAsTheDashboardShowsThem() {
+        let records = PaymentRecord.parse(document: json(Self.paymentsDoc))
+        XCTAssertEqual(records.map(\.id), ["t2", "t1", "t3"])     // newest first; the undated record goes last
+        XCTAssertEqual(records[0].amountText, "₹1599.20")
+        XCTAssertEqual(records[0].status, .failure)
+        XCTAssertEqual(records[0].typeText, "Upgrade")
+        XCTAssertEqual(records[0].failureReason, "Payment declined")
+        XCTAssertEqual(records[1].planName, "Basic")              // the stored name has a trailing space
+        XCTAssertEqual(records[1].status, .success)
+        XCTAssertEqual(records[1].typeText, "New Plan")
+        XCTAssertNil(records[1].failureReason)
+        XCTAssertEqual(records[2].amountText, "N/A")
+        XCTAssertEqual(records[2].status, .other("refunded"))
+    }
+
+    func testActivityAndPaymentsAreFetchedFromTheRightDocuments() async throws {
+        let t = MockTransport([(Self.activityDoc, 200), (Self.paymentsDoc, 200), ("{}", 404), ("{}", 403)])
+        let client = FirestoreClient(transport: t)
+        let log = try await client.activityLog(vmid: 754, uid: "u1", idToken: "TK")
+        let paid = try await client.payments(uid: "u1", idToken: "TK")
+        XCTAssertEqual(log.count, 3)
+        XCTAssertEqual(paid.count, 3)
+        XCTAssertTrue(t.requests[0].url!.absoluteString.hasSuffix("/documents/vm_logs/754-u1"))
+        XCTAssertTrue(t.requests[1].url!.absoluteString.hasSuffix("/documents/transactions/u1"))
+        XCTAssertEqual(t.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer TK")
+        // No document yet (a new account): empty, not an error
+        let none = try await client.activityLog(vmid: 1, uid: "u2", idToken: "TK")
+        XCTAssertEqual(none, [])
+        do { _ = try await client.payments(uid: "u1", idToken: "TK"); XCTFail("403 should throw") }
+        catch { XCTAssertEqual(error as? TCError, .sessionExpired) }
+    }
+
+    func testTrafficRatesMatchTheDashboardsFormula() {
+        var meter = TrafficMeter()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        meter.record(netin: 10 * 1_048_576, netout: 1 * 1_048_576, at: t0)
+        XCTAssertEqual(meter.rate, TrafficRate())                 // the first sample has nothing to compare with
+        meter.record(netin: 30 * 1_048_576, netout: 3 * 1_048_576, at: t0.addingTimeInterval(4))
+        XCTAssertEqual(meter.rate.downloadMBps, 5, accuracy: 1e-9)   // 20 MB over 4 s
+        XCTAssertEqual(meter.rate.uploadMBps, 0.5, accuracy: 1e-9)
+        // The PC restarted: counters went down. That is no traffic, never a negative speed.
+        meter.record(netin: 1_000, netout: 500, at: t0.addingTimeInterval(8))
+        XCTAssertEqual(meter.rate, TrafficRate())
+        meter.reset()
+        meter.record(netin: 5, netout: 5, at: t0.addingTimeInterval(20))
+        XCTAssertEqual(meter.rate, TrafficRate())
+        XCTAssertEqual(TrafficMeter.text(bytes: 1_572_864), "1.5 MB")
+        XCTAssertEqual(TrafficMeter.text(bytes: -5), "Zero KB")
+    }
+
+    func testStatusCarriesTheNetworkCounters() throws {
+        let s = try VmStatus(json: ["status": "running", "uptime": 60, "hasIp": true, "isSunshineReady": true,
+                                    "netin": 2_097_152, "netout": 1_048_576, "cpu": 0.1, "mem": 1, "maxmem": 2])
+        XCTAssertEqual(s.netin, 2_097_152)
+        XCTAssertEqual(s.netout, 1_048_576)
+        XCTAssertEqual(try VmStatus(json: ["status": "stopped"]).netin, 0)
+    }
+
+    func testPlanEndDate() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func profile(_ offset: TimeInterval?) -> RigProfile {
+            RigProfile(uid: "u", node: "n", vmid: 1, moonlightHost: "h", expiration: offset.map { now.addingTimeInterval($0) })
+        }
+        XCTAssertEqual(profile(25.6 * 86_400).daysUntilExpiry(at: now), 25)
+        XCTAssertFalse(profile(25.6 * 86_400).isExpiringSoon(at: now))
+        XCTAssertTrue(profile(3.2 * 86_400).isExpiringSoon(at: now))
+        XCTAssertTrue(profile(4.9 * 86_400).isExpiringSoon(at: now))
+        XCTAssertFalse(profile(5.1 * 86_400).isExpiringSoon(at: now))
+        XCTAssertTrue(profile(0.4 * 86_400).isExpiringSoon(at: now))      // less than a day left still counts
+        XCTAssertFalse(profile(-3_600).isExpiringSoon(at: now))           // already ended: expired, not "soon"
+        XCTAssertTrue(profile(-3_600).isExpired(at: now))
+        XCTAssertNil(profile(nil).daysUntilExpiry(at: now))
+        XCTAssertFalse(profile(nil).isExpiringSoon(at: now))
     }
 }

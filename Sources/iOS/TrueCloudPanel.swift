@@ -142,13 +142,19 @@ final class TrueCloudStore: ObservableObject {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
         guard let value = env["TRUECLOUD_PREVIEW"] else { return false }
-        auth.previewSignIn(value == "login" ? nil : Self.sampleProfile)
+        // The plan ends in 25 days; `:expiring` makes it 3 and `:expired` yesterday, to see the banners.
+        let daysLeft: Double = value.contains(":expired") ? -1 : value.contains(":expiring") ? 3.2 : 25.6
+        auth.previewSignIn(value == "login" ? nil : Self.sampleProfile(daysLeft: daysLeft))
         let phases: [String: SessionService.Phase] = [
             "checking": .checking, "idle": .idle, "starting": .starting, "booting": .booting,
             "ready": .ready, "pairing": .pairing, "streaming": .streaming, "shutting": .shuttingDown,
         ]
         if value.hasPrefix("home:"), let name = value.dropFirst(5).split(separator: ":").first, let phase = phases[String(name)] {
-            session.previewPhase(phase, status: VmStatus(status: "running", uptime: 74, hasIP: true))
+            // Running phases carry network counters and a speed, for the chips under the status text
+            let running = ["booting", "ready", "pairing", "streaming", "shutting"].contains(String(name))
+            session.previewPhase(phase, status: VmStatus(status: "running", uptime: 74, hasIP: true,
+                                                         netin: running ? 1.8 * 1_073_741_824 : 0, netout: running ? 0.4 * 1_073_741_824 : 0))
+            if running { session.previewTraffic(TrafficRate(downloadMBps: 1.42, uploadMBps: 0.18)) }
         }
         // `controls` opens the on-screen controls editor; add `:selected`, `:selected:options` (Appearance card open), `:selected:removed` (two controls in the tray), `:play` (controls lit as if held) or
         // `:bright` (day scene). `controls:selftest` runs the input-logic checks and logs the results.
@@ -187,10 +193,10 @@ final class TrueCloudStore: ObservableObject {
     }
 
     #if DEBUG
-    static let sampleProfile = RigProfile(
+    static func sampleProfile(daysLeft: Double = 25.6) -> RigProfile { RigProfile(
         uid: "preview", displayName: "Samyak Jain", node: "node1", vmid: 100, moonlightHost: "moonlight-a2.truecloud.in",
         currentPlan: "Pro", hoursRemaining: 3.95, planHours: 6, dailyLimitHours: 4, subscription: true, hasPairedBefore: true,
-        expiration: .now.addingTimeInterval(12 * 86_400))
+        expiration: .now.addingTimeInterval(daysLeft * 86_400)) }
     #endif
 
     private static var keyWindow: UIWindow? {

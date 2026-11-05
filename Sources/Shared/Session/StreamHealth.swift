@@ -16,8 +16,8 @@ final class StreamHealth: ObservableObject {
     /// Called once per congestion episode (and at most every two minutes) with the latency.
     var onCongestion: ((Double) -> Void)?
 
-    /// The gateway's Moonlight port; a TCP handshake to it is one round trip.
-    private static let probePort: UInt16 = 35450
+    /// The Moonlight port to probe when the stream address carries none; a TCP handshake to it is one round trip.
+    private static let defaultProbePort = UInt16(TCConstants.streamPort)
     private var task: Task<Void, Never>?
     private var recent: [Double] = []
     private var baseline: Double?
@@ -25,10 +25,13 @@ final class StreamHealth: ObservableObject {
 
     func start(host address: String) {
         stop()
-        let host = address.split(separator: ":").first.map(String.init) ?? address
+        // The stream address is "host:port" with this account's own Moonlight port: probe that one.
+        let parts = address.split(separator: ":")
+        let host = parts.first.map(String.init) ?? address
+        let port = parts.dropFirst().first.flatMap { UInt16($0) } ?? Self.defaultProbePort
         task = Task { [weak self] in
             while !Task.isCancelled {
-                let ms = await NetworkCheck.handshakeTime(host: host, port: .init(rawValue: Self.probePort)!)
+                let ms = await NetworkCheck.handshakeTime(host: host, port: .init(rawValue: port) ?? .init(rawValue: Self.defaultProbePort)!)
                 if let ms { self?.record(ms) }
                 try? await Task.sleep(for: .seconds(4))
             }

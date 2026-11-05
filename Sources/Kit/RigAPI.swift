@@ -10,15 +10,20 @@ public struct VmStatus: Equatable, Sendable {
     public var cpu: Double             // 0...1
     public var mem: Double             // bytes
     public var maxmem: Double
+    /// Bytes the cloud PC has received and sent since it started (running counters).
+    public var netin: Double
+    public var netout: Double
     public var isSunshineReady: Bool
 
     public var isRunning: Bool { status == "running" }
     public var isStopped: Bool { status == "stopped" }
 
     public init(status: String, uptime: Int = 0, lock: String? = nil, hasIP: Bool = false, ip: String? = nil,
-                cpu: Double = 0, mem: Double = 0, maxmem: Double = 0, isSunshineReady: Bool = false) {
+                cpu: Double = 0, mem: Double = 0, maxmem: Double = 0, netin: Double = 0, netout: Double = 0,
+                isSunshineReady: Bool = false) {
         self.status = status; self.uptime = uptime; self.lock = lock; self.hasIP = hasIP; self.ip = ip
-        self.cpu = cpu; self.mem = mem; self.maxmem = maxmem; self.isSunshineReady = isSunshineReady
+        self.cpu = cpu; self.mem = mem; self.maxmem = maxmem; self.netin = netin; self.netout = netout
+        self.isSunshineReady = isSunshineReady
     }
 
     public init(json: [String: Any]) throws {
@@ -29,8 +34,26 @@ public struct VmStatus: Equatable, Sendable {
         func num(_ k: String) -> Double { (json[k] as? NSNumber)?.doubleValue ?? 0 }
         self.init(status: status, uptime: Int(num("uptime")), lock: json["lock"] as? String,
                   hasIP: json["hasIp"] as? Bool ?? false, ip: json["ip"] as? String,
-                  cpu: num("cpu"), mem: num("mem"), maxmem: num("maxmem"),
+                  cpu: num("cpu"), mem: num("mem"), maxmem: num("maxmem"), netin: num("netin"), netout: num("netout"),
                   isSunshineReady: json["isSunshineReady"] as? Bool ?? false)
+    }
+}
+
+/// The switches TrueCloud's administrators flip (GET /api/system-controls, public). The dashboard greys out Start
+/// while `startButtonEnabled` is false and shows the reason.
+public struct SystemControls: Equatable, Sendable {
+    public var startEnabled: Bool
+    public var startDisabledReason: String?
+
+    public init(startEnabled: Bool = true, startDisabledReason: String? = nil) {
+        self.startEnabled = startEnabled
+        self.startDisabledReason = startDisabledReason
+    }
+
+    public init?(json: Any?) {
+        guard let dict = json as? [String: Any] else { return nil }
+        self.init(startEnabled: dict["startButtonEnabled"] as? Bool ?? true,
+                  startDisabledReason: dict["startButtonDisabledReason"] as? String)
     }
 }
 
@@ -64,6 +87,15 @@ public struct RigAPI: Sendable {
     /// Hard power-off.
     public func stopVm(node: String, vmid: Int, idToken: String) async throws {
         _ = try await call("stopVm", args: [node, vmid, idToken])
+    }
+
+    /// Whether administrators have paused starting cloud PCs. nil when it can't be read: the server enforces the
+    /// pause anyway, so a failed read never blocks a start.
+    public func systemControls() async -> SystemControls? {
+        var request = URLRequest(url: TCConstants.siteBase.appendingPathComponent("api/system-controls"))
+        request.timeoutInterval = 15
+        guard let (data, status) = try? await transport.send(request), (200..<300).contains(status) else { return nil }
+        return SystemControls(json: try? JSONSerialization.jsonObject(with: data))
     }
 
     /// Gives Sunshine the PIN that Moonlight's pair request is showing.

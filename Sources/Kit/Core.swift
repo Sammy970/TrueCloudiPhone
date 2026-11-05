@@ -8,7 +8,8 @@ public enum TCConstants {
     public static let siteBase = URL(string: "https://truecloud.in")!
     public static let rigPageURL = URL(string: "https://truecloud.in/dashboard/rig")!
 
-    /// Moonlight streaming port; Sunshine's pairing/config port is one above it.
+    /// Defaults only, for a profile that doesn't carry its own `moonlight_port` / `sunshine_port`: every account has
+    /// its own ports, so streams use `RigProfile.moonlightPort`. Sunshine's port is one above Moonlight's.
     public static let streamPort = 35450
     public static let sunshinePort = 35451
 

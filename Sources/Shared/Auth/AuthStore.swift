@@ -60,6 +60,33 @@ final class AuthStore: ObservableObject {
         if let fresh = try? await firestore.profile(uid: uid, idToken: token) { profile = fresh }
     }
 
+    /// Tells TrueCloud this account has paired a Moonlight client, as the dashboard does once a PIN is accepted
+    /// (its home page keeps showing the "get connected" guide until then). Once per account; a failure is only logged.
+    func markPairedBefore() async {
+        guard profile?.hasPairedBefore == false, let uid = tokens?.uid, let token = try? await idToken() else { return }
+        do {
+            try await firestore.markPairedBefore(uid: uid, idToken: token)
+            profile?.hasPairedBefore = true
+            Log.info("[auth] marked the account as paired")
+        } catch {
+            Log.info("[auth] couldn't mark the account as paired: \(error.localizedDescription)")
+        }
+    }
+
+    /// The cloud PC's power-event log, as TrueCloud recorded it (newest first).
+    func activityLog() async throws -> [ActivityEntry] {
+        let token = try await idToken()
+        guard let uid = tokens?.uid, let vmid = profile?.vmid else { throw TCError.sessionExpired }
+        return try await firestore.activityLog(vmid: vmid, uid: uid, idToken: token)
+    }
+
+    /// The account's payment history (newest first).
+    func payments() async throws -> [PaymentRecord] {
+        let token = try await idToken()
+        guard let uid = tokens?.uid else { throw TCError.sessionExpired }
+        return try await firestore.payments(uid: uid, idToken: token)
+    }
+
     func logout() { signOut(notice: nil) }
 
     /// A valid ID token, refreshing it when it is about to expire (or when `force` is set).

@@ -46,6 +46,11 @@ struct TrueCloudHomeView: View {
     @State private var showingAbout = false
     @State private var showingControls = false
     @State private var showingControllers = false
+    @State private var showingActivity = false
+    @State private var showingPayments = false
+    /// Kept here so the sheets show the last list at once and refresh behind it.
+    @StateObject private var activityModel = ActivityModel()
+    @StateObject private var paymentsModel = PaymentsModel()
     /// Watches controllers for the controller-check card and sheet.
     @StateObject private var gamepads = GamepadMonitor()
     /// Kept here so the card can show the last result.
@@ -79,7 +84,10 @@ struct TrueCloudHomeView: View {
                 .id(connecting ? "connecting" : session.phase.screenState)
                 .transition(.opacity.combined(with: .offset(y: 6)))
                 .reveal(0.12)
-                .padding(.bottom, 20)
+                .padding(.bottom, session.status?.isRunning == true ? 12 : 20)
+
+                telemetry
+                    .padding(.bottom, 20)
 
                 ConnectionTrack(phase: session.phase)
                     .padding(.horizontal, 18)
@@ -98,6 +106,8 @@ struct TrueCloudHomeView: View {
                         streamCard.reveal(0.3)
                         networkCard.reveal(0.33)
                         controlsCard.reveal(0.345)
+                        activityCard.reveal(0.35)
+                        paymentsCard.reveal(0.355)
                         appCard.reveal(0.36)
                     }
                 }
@@ -185,6 +195,12 @@ struct TrueCloudHomeView: View {
         .sheet(isPresented: $showingControllers) {
             ControllersSheet(monitor: gamepads) { showingControllers = false }
         }
+        .sheet(isPresented: $showingActivity) {
+            ActivitySheet(model: activityModel)
+        }
+        .sheet(isPresented: $showingPayments) {
+            PaymentsSheet(model: paymentsModel)
+        }
         .onAppear(perform: previewControllers)
         .onAppear { syncNetworkHost() }
         .onChange(of: session.endpoint) { _ in syncNetworkHost() }
@@ -229,9 +245,72 @@ struct TrueCloudHomeView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     ProfileBadge(profile: profile, size: 40)
                     PlanUsage(profile: profile)
+                    expiryBanner(profile)
                 }
             }
         }
+    }
+
+    /// Red when the plan has ended, orange in its last days, like the dashboard's banners.
+    @ViewBuilder
+    private func expiryBanner(_ profile: RigProfile) -> some View {
+        if let end = profile.expiration {
+            let date = PlanUsage.dateText(end)
+            if profile.isExpired() {
+                notice("Your plan ended on \(date). Renew it at truecloud.in to keep playing.",
+                       symbol: "xmark.octagon.fill", tint: .red)
+            } else if profile.isExpiringSoon(), let days = profile.daysUntilExpiry() {
+                let when = days < 1 ? "today" : days == 1 ? "in 1 day" : "in \(days) days"
+                notice("Your plan ends \(when) (\(date)).", symbol: "exclamationmark.triangle.fill", tint: .orange)
+            }
+        }
+    }
+
+    private func notice(_ text: String, symbol: String, tint: Color) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).foregroundStyle(tint)
+            Text(text)
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button("Renew") { openURL(Config.dashboardURL.appendingPathComponent("plans")) }
+                .textLinkStyle()
+                .font(.footnote.weight(.semibold))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(tint.opacity(0.3)))
+    }
+
+    /// Network speed and data used, while the cloud PC runs.
+    @ViewBuilder
+    private var telemetry: some View {
+        if let status = session.status, status.isRunning, session.phase != .shuttingDown {
+            let down = chip("arrow.down", String(format: "%.2f MB/s", session.traffic.downloadMBps))
+            let up = chip("arrow.up", String(format: "%.2f MB/s", session.traffic.uploadMBps))
+            let used = chip("arrow.up.arrow.down", "\(TrafficMeter.text(bytes: status.netin + status.netout)) used")
+            // One line on a 6.1" screen; two when it doesn't fit (larger text sizes)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) { down; up; used }
+                VStack(spacing: 6) {
+                    HStack(spacing: 6) { down; up }
+                    used
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private func chip(_ symbol: String, _ text: String) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.caption2.weight(.medium))
+            .monospacedDigit()
+            .lineLimit(1)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .glassCapsule()
     }
 
     // MARK: Actions
@@ -384,6 +463,58 @@ struct TrueCloudHomeView: View {
         .disabled(connecting)
     }
 
+    private var activityCard: some View {
+        Button { showingActivity = true } label: {
+            card {
+                HStack(spacing: 12) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(Color.tcAccent.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Activity").font(.subheadline.weight(.semibold))
+                        Text("Starts, shutdowns and how they went")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(connecting)
+    }
+
+    private var paymentsCard: some View {
+        Button { showingPayments = true } label: {
+            card {
+                HStack(spacing: 12) {
+                    Image(systemName: "creditcard")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(Color.tcAccent.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Payments").font(.subheadline.weight(.semibold))
+                        Text("Purchases, upgrades and failures")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(connecting)
+    }
+
     /// e.g. "Auto · Trackpad · Floating sticks on · Xbox Wireless Controller connected"
     private var controlsSummary: String {
         let level = ["Off", "Auto", "Simple", "Full"][min(max(prefs.onscreenControls, 0), 3)]
@@ -395,7 +526,7 @@ struct TrueCloudHomeView: View {
     }
 
     /// Debug builds only: `TRUECLOUD_PREVIEW=home:<phase>:controllers` opens the controller check, and
-    /// `:sample` shows a sample controller mid-press.
+    /// `:sample` shows a sample controller mid-press. `:activity` and `:payments` open those sheets with sample data.
     private func previewControllers() {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["TRUECLOUD_PREVIEW"] else { return }
@@ -406,6 +537,8 @@ struct TrueCloudHomeView: View {
         if value.contains(":settings") { showingSettings = true }
         if value.hasSuffix(":network") { showingNetwork = true }
         if value.contains(":about") { showingAbout = true }
+        if value.contains(":activity") { activityModel.preview(Self.sampleActivity); showingActivity = true }
+        if value.contains(":payments") { paymentsModel.preview(Self.samplePayments); showingPayments = true }
         if value.contains(":roundtrip") {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
@@ -420,6 +553,39 @@ struct TrueCloudHomeView: View {
         }
         #endif
     }
+
+    #if DEBUG
+    private static var sampleActivity: [ActivityEntry] {
+        let now = Date()
+        let rows: [(String, String, TimeInterval)] = [
+            ("start", "Success: Start command sent", 2_400),
+            ("system", "Log initialized.", 2_460),
+            ("shutdown", "Success: VM stopped", 9_000),
+            ("start", "Success: Start command sent", 17_000),
+            ("shutdown", "Timed out waiting for stop status", 26_000),
+            ("shutdown", "Success: VM stopped", 30_000),
+            ("start", "Success: Start command sent", 36_000),
+            ("shutdown", "Success: VM stopped", 100_000),
+            ("start", "Success: Start command sent", 108_000),
+            ("start", "Success: Start command sent", 120_000),
+        ]
+        return rows.enumerated().map { index, row in
+            ActivityEntry(id: "\(index)", type: row.0, status: row.1, timestamp: now.addingTimeInterval(-row.2))
+        }
+    }
+
+    private static var samplePayments: [PaymentRecord] {
+        let now = Date()
+        return [
+            PaymentRecord(id: "p3", planName: "Regular", amount: 159_920, status: .pending, isUpgrade: true,
+                          createdAt: now.addingTimeInterval(-3_600)),
+            PaymentRecord(id: "p2", planName: "Regular", amount: 159_920, status: .failure, isUpgrade: true,
+                          createdAt: now.addingTimeInterval(-86_400 * 9), failureReason: "Payment declined"),
+            PaymentRecord(id: "p1", planName: "Basic", amount: 99_900, status: .success,
+                          createdAt: now.addingTimeInterval(-86_400 * 40)),
+        ]
+    }
+    #endif
 
     /// The last result, e.g. "45 ms · Good · 322 Mbps", or what the check does.
     private var networkSummary: String {
@@ -503,6 +669,8 @@ struct TrueCloudHomeView: View {
         Task {
             defer { connecting = false }
             do {
+                // The rig's address and port come from the profile: read it fresh, in case TrueCloud changed them
+                await auth.reloadProfile()
                 let host = try store.prepareConnection()
                 Log.info("[panel] play → \(host), phase \(session.phase)")
                 // Moonlight's main screen picks this up in viewDidAppear once the panel is gone.

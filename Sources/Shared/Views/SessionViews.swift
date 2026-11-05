@@ -368,12 +368,47 @@ struct PlanUsage: View {
             if !profile.isUnlimited {
                 AccentBar(value: Double(left) / max(profile.planHours * 60, Double(total), 1), height: compact ? 4 : 6)
             }
+            if let end = profile.expiration {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Valid until").foregroundStyle(.secondary)
+                    Spacer()
+                    Text(Self.validity(of: profile, end: end))
+                        .monospacedDigit()
+                        .foregroundStyle(Self.validityTint(of: profile) ?? Color.primary)
+                }
+                .font(compact ? .caption : .subheadline)
+            }
         }
         .onAppear {
             guard !filled else { return }
             if reduceMotion { filled = true; return }
             withAnimation(.easeOut(duration: 1.1).delay(0.3)) { filled = true }
         }
+    }
+
+    static func dateText(_ date: Date) -> String {
+        date.formatted(.dateTime.day().month(.abbreviated).year())
+    }
+
+    /// The end date, worded for its state: "Expired 3 Nov 2026", "3 Nov 2026 · 2 days left" or just the date.
+    static func validity(of profile: RigProfile, end: Date) -> String {
+        let date = dateText(end)
+        if profile.isExpired() { return "Expired \(date)" }
+        if profile.isExpiringSoon(), let days = profile.daysUntilExpiry() {
+            switch days {
+            case ..<1: return "\(date) · ends today"
+            case 1: return "\(date) · 1 day left"
+            default: return "\(date) · \(days) days left"
+            }
+        }
+        return date
+    }
+
+    /// Red once expired, orange in the last days, nil otherwise.
+    static func validityTint(of profile: RigProfile) -> Color? {
+        if profile.isExpired() { return .red }
+        if profile.isExpiringSoon() { return .orange }
+        return nil
     }
 
     static func duration(_ minutes: Int) -> String {

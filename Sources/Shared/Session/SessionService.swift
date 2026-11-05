@@ -14,7 +14,7 @@ protocol StreamDriver: AnyObject {
     func stop()
 }
 
-/// Which TrueCloud gateway to stream through. Both reach the same rig on port 35450.
+/// Which TrueCloud gateway to stream through. Both reach the same rig, on the account's own Moonlight port.
 enum Endpoint: String, CaseIterable, Identifiable, Codable {
     case a2, a4
     var id: String { rawValue }
@@ -30,7 +30,7 @@ enum Endpoint: String, CaseIterable, Identifiable, Codable {
     }
 
     /// What Moonlight connects to.
-    func streamAddress(for profile: RigProfile) -> String { "\(host(for: profile)):\(TCConstants.streamPort)" }
+    func streamAddress(for profile: RigProfile) -> String { "\(host(for: profile)):\(profile.moonlightPort)" }
 
     private static let key = "endpoint"
     static func load() -> Endpoint { UserDefaults.standard.string(forKey: key).flatMap(Endpoint.init) ?? .a2 }
@@ -86,6 +86,8 @@ final class SessionService: ObservableObject {
     @Published var endpoint = Endpoint.load() { didSet { endpoint.save() } }
     /// Seconds until the next start is allowed (the website enforces a 30 s cooldown).
     @Published private(set) var cooldown = 0
+    /// Live download/upload speed, derived from the cloud PC's byte counters between polls.
+    @Published private(set) var traffic = TrafficRate()
 
     private let auth: AuthStore
     private let driver: StreamDriver?
@@ -95,6 +97,9 @@ final class SessionService: ObservableObject {
     private var startedAt: Date?
     private var shutdownAt: Date?
     private var cooldownTask: Task<Void, Never>?
+    private var meter = TrafficMeter()
+    private var lastProfileRefresh = Date.now
+    private static let profileRefreshInterval: TimeInterval = 60
 
     /// How long a power-on may show "stopped" before we call it failed.
     private static let startGrace: TimeInterval = 120
@@ -118,6 +123,8 @@ final class SessionService: ObservableObject {
         self.phase = phase
         self.status = status
     }
+
+    func previewTraffic(_ rate: TrafficRate) { traffic = rate }
     #endif
 
     // MARK: Polling
@@ -149,10 +156,23 @@ final class SessionService: ObservableObject {
     }
 
     func refreshStatus() async {
+        // The dashboard listens to the profile live; polling it once a minute keeps time left, ports and the rig's
+        // address from going stale (TrueCloud can re-provision a rig or change its port while the app is open).
+        if Date.now.timeIntervalSince(lastProfileRefresh) > Self.profileRefreshInterval {
+            lastProfileRefresh = .now
+            await auth.reloadProfile()
+        }
         guard let p = profile else { return }
         do {
             let s = try await rig.vmStatus(node: p.node, vmid: p.vmid, sunshineAddress: p.sunshineAddress)
             status = s
+            // Counters restart with the VM, so only a running one has a meaningful speed
+            if s.isRunning {
+                meter.record(netin: s.netin, netout: s.netout)
+                traffic = meter.rate
+            } else {
+                resetTraffic()
+            }
             apply(s)
         } catch {
             Log.info("[session] status failed: \(error.localizedDescription)")
@@ -198,28 +218,36 @@ final class SessionService: ObservableObject {
         launchTask?.cancel()
         driver?.stop()
         streamHost = nil
+        resetTraffic()
+    }
+
+    private func resetTraffic() {
+        meter.reset()
+        traffic = TrafficRate()
     }
 
     // MARK: Controls
 
     func start() {
-        guard phase == .idle, let p = profile else { return }
-        guard p.subscription else {
-            notice = Notice(title: "No Active Plan", message: "Your TrueCloud subscription isn't active. Renew it at truecloud.in.")
-            return
-        }
-        guard p.hasEnoughTimeToStart else {
-            notice = Notice(title: "Not Enough Time", message: "You need at least 3 minutes of plan time left to start. Upgrade or add time at truecloud.in.")
-            return
-        }
+        guard phase == .idle, profile != nil else { return }
         guard cooldown == 0 else {
             notice = Notice(title: "Please Wait", message: "Wait \(cooldown)s between start attempts.")
             return
         }
-        if lockMessage != nil { notice = Notice(title: "Cloud PC Busy", message: lockMessage ?? ""); return }
+        // Optimistic, so a second press does nothing while the checks below run
         phase = .starting
         startedAt = .now
         Task {
+            // Time left, the plan and the rig's address may have changed since the app last looked
+            lastProfileRefresh = .now
+            await auth.reloadProfile()
+            if let refusal = await startRefusal() {
+                startedAt = nil
+                phase = .idle
+                notice = refusal
+                return
+            }
+            guard let p = profile else { startedAt = nil; phase = .idle; return }
             do {
                 try await withToken { try await self.rig.startVm(node: p.node, vmid: p.vmid, idToken: $0) }
                 beginCooldown()
@@ -230,6 +258,30 @@ final class SessionService: ObservableObject {
                 report("Couldn't Start", error)
             }
         }
+    }
+
+    /// Why the cloud PC can't be started right now, or nil: the same gate the dashboard applies before its Start
+    /// button works (plan, expiry, provisioning, time left, a rig being built, and the administrators' pause).
+    private func startRefusal() async -> Notice? {
+        guard let p = profile else { return nil }
+        guard p.subscription else {
+            return Notice(title: "No Active Plan", message: "Your TrueCloud subscription isn't active. Renew it at truecloud.in.")
+        }
+        if p.isExpired() {
+            let ended = p.expiration.map { " on \($0.formatted(date: .abbreviated, time: .omitted))" } ?? ""
+            return Notice(title: "Plan Expired", message: "Your TrueCloud plan ended\(ended). Renew it at truecloud.in.")
+        }
+        guard p.isProvisioned else {
+            return Notice(title: "Cloud PC Is Being Set Up", message: "TrueCloud is still preparing your cloud PC. Try again in a few minutes.")
+        }
+        guard p.hasEnoughTimeToStart else {
+            return Notice(title: "Not Enough Time", message: "You need at least 3 minutes of plan time left to start. Upgrade or add time at truecloud.in.")
+        }
+        if let message = lockMessage { return Notice(title: "Cloud PC Busy", message: message) }
+        if let controls = await rig.systemControls(), !controls.startEnabled {
+            return Notice(title: "Starting Is Paused", message: controls.startDisabledReason ?? "TrueCloud has paused starting cloud PCs for now. Check their Discord for updates.")
+        }
+        return nil
     }
 
     /// Graceful shutdown. The stream (if any) ends first.
@@ -283,11 +335,15 @@ final class SessionService: ObservableObject {
 
     /// Hands off to the platform driver, which pairs first if Moonlight isn't paired yet.
     func play(settings: StreamSettings) {
-        guard phase == .ready, let driver, let p = profile else { return }
+        guard phase == .ready, let driver, profile != nil else { return }
         phase = .pairing
-        let address = endpoint.streamAddress(for: p)
         launchTask = Task { [weak self] in
             guard let self else { return }
+            // The rig's address and port come from the profile: read it fresh, in case TrueCloud changed them
+            lastProfileRefresh = .now
+            await auth.reloadProfile()
+            guard let p = profile else { phase = .ready; return }
+            let address = endpoint.streamAddress(for: p)
             streamHost = address
             do {
                 try await driver.run(host: address, settings: settings, session: self)
@@ -325,6 +381,7 @@ final class SessionService: ObservableObject {
         do {
             try await withToken { try await self.rig.sendPin(sunshineAddress: p.sunshineAddress, pin: pin, idToken: $0) }
             Log.info("[pair] PIN accepted")
+            await auth.markPairedBefore()
             return true
         } catch {
             Log.info("[pair] PIN not accepted: \(error.localizedDescription)")

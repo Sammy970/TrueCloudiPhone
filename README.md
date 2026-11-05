@@ -8,7 +8,7 @@
 TrueCloud built into the open-source Moonlight client: one app, automatic pairing, no addresses or PINs to type.
 
 <p>
-  <img src="https://img.shields.io/badge/version-0.1.2-00A396?style=flat-square" alt="Version 0.1.2">
+  <img src="https://img.shields.io/badge/version-0.1.3-00A396?style=flat-square" alt="Version 0.1.3">
   <img src="https://img.shields.io/badge/iOS-17%2B%20·%20glass%20on%2026%2B-111111?style=flat-square&logo=apple&logoColor=white" alt="iOS 26+">
   <img src="https://img.shields.io/badge/Swift-5-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift">
   <img src="https://img.shields.io/badge/UI-Liquid%20Glass-00A396?style=flat-square" alt="Liquid Glass">
@@ -88,13 +88,55 @@ A drawn monitor shows the answer, the track under it shows how far along you are
   </tr>
 </table>
 
+## Your plan, and what your cloud PC is doing
+
+The plan card shows the date your plan ends, and while the cloud PC runs you can see how much data it is moving.
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset=".github/screenshots/dark-plan-ready.png"><img src=".github/screenshots/light-plan-ready.png" width="100%" alt="Cloud PC ready: the plan card shows Valid until Dec 1, 2026, and under the status a row shows download 1.42 MB/s, upload 0.18 MB/s and 2.2 GB used"></picture>
+      <p align="center"><b>Valid until, and network usage</b><br><sub>Download, upload and data used so far.</sub></p>
+    </td>
+    <td width="33%" valign="top">
+      <img src=".github/screenshots/dark-plan-expiring.png" width="100%" alt="The plan card with an orange banner: Your plan ends in 3 days, and a Renew link">
+      <p align="center"><b>Ending soon</b><br><sub>A warning under 5 days, with a Renew link.</sub></p>
+    </td>
+    <td width="33%" valign="top">
+      <img src=".github/screenshots/dark-plan-expired.png" width="100%" alt="The plan card with a red banner: Your plan ended, renew it at truecloud.in">
+      <p align="center"><b>Ended</b><br><sub>Start explains why it can't start.</sub></p>
+    </td>
+  </tr>
+</table>
+
+## Activity and payments
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset=".github/screenshots/dark-activity.png"><img src=".github/screenshots/light-activity.png" width="100%" alt="Activity: your cloud PC's starts and shutdowns grouped by day, with green and red status dots"></picture>
+      <p align="center"><b>Activity</b><br><sub>Every start, shutdown and force stop, and how it went.</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <picture><source media="(prefers-color-scheme: dark)" srcset=".github/screenshots/dark-payments.png"><img src=".github/screenshots/light-payments.png" width="100%" alt="Payments: plan purchases and upgrades with date, plan, type, status and amount in rupees"></picture>
+      <p align="center"><b>Payments</b><br><sub>Your purchases and upgrades, and why a payment failed.</sub></p>
+    </td>
+  </tr>
+</table>
+
+The activity log is TrueCloud's own record of your cloud PC's power events, so it is also the quickest way to show their support exactly what happened
+(for example a shutdown that "timed out waiting for stop status"). Your IP address, which TrueCloud stores with each entry, is never shown.
+
 ## What it does
 
 The app is called **TrueCloud** on your home screen and opens straight into it, in portrait. Moonlight only
 does the streaming underneath; you never see its host list or settings.
 
 - **Sign in** with email and password. The password is never stored; only the refresh token is, in the iOS Keychain.
-- **Your plan up top:** time left this month, with your plan name.
+- **Your plan up top:** time left this month, your plan name and the date the plan ends, with a warning when it is close and a clear message when it has ended.
+- **Network usage** while the cloud PC runs: download and upload speed, and the data used so far.
+- **Activity** (every start, shutdown and force stop with its result) and **Payments** (purchases, upgrades and failures), from the home screen.
+- **Works for every account.** The app reads your own rig's address and Moonlight port from your TrueCloud profile, as the website does, so it doesn't assume anyone else's, and it keeps that profile fresh while it is open.
 - **Start Cloud PC, then Play.** A drawn monitor and a Power on → Boot → Sunshine → Play track show where the session is.
   Play adds the cloud PC to Moonlight, pairs it (the PIN goes to TrueCloud for you) and launches Desktop in landscape.
 - **Back to TrueCloud** as soon as the stream ends.
@@ -180,7 +222,7 @@ way: a small pill at the top, the controls themselves in the clear, and a faint 
 
 ## Install with SideStore (no Xcode needed)
 
-**[Download TrueCloud-0.1.2.ipa](https://github.com/Sammy970/TrueCloudiPhone/releases/latest)**: unsigned, so it
+**[Download TrueCloud-0.1.3.ipa](https://github.com/Sammy970/TrueCloudiPhone/releases/latest)**: unsigned, so it
 contains nothing personal, and you sign it with your own Apple ID.
 
 1. Set up [SideStore](https://sidestore.io) on your iPhone (a one-time setup with a computer; their guide walks you
@@ -223,6 +265,8 @@ APPEARANCE=light scripts/sim-shot.sh home:idle:network light-network 16
 | `login` | The sign-in screen |
 | `home:<phase>` | `checking`, `idle`, `starting`, `booting`, `ready`, `pairing`, `streaming` or `shutting` |
 | `home:<phase>:settings`, `:network`, `:controls`, `:controllers`, `:about` | That sheet over the home screen; add `:sample` for a sample controller |
+| `home:<phase>:activity`, `:payments` | The Activity or Payments sheet, with sample data |
+| `home:<phase>:expiring`, `:expired` | The plan card with the plan ending in 3 days, or ended yesterday |
 | `controls`, `controls:selected`, `controls:play`, `controls:bright` | The on-screen controls editor, with a control selected, held down, or on the day scene |
 | `controls:selected:options`, `controls:selected:removed` | The editor with the Size and Opacity card open, or with two controls removed so the tray shows |
 | `controls:selftest` | Runs the input-logic checks and logs the result |
@@ -241,9 +285,9 @@ Sign in ──▶ Start Cloud PC ──▶ boot ──▶ Sunshine answers ─�
                          add host ──▶ pair (PIN sent to TrueCloud) ──▶ stream "Desktop"
 ```
 
-- `Sources/Kit` is `TrueCloudKit` (Firebase sign-in, Firestore profile, the Server Action resolver and the rig API), shared with the Mac app.
+- `Sources/Kit` is `TrueCloudKit` (Firebase sign-in, Firestore profile, the activity log and payments, network speeds, the Server Action resolver and the rig API), shared with the Mac app.
 - `Sources/Shared` holds the session, sign-in and views shared with the Mac app. `Sources/iOS` is the iPhone panel, the glass on-screen
-  controls and their editor, the controller check and the stream settings.
+  controls and their editor, the controller check, the stream settings and the Activity and Payments sheets.
 - `moonlight-objc.patch` hooks Moonlight's Objective-C (AppDelegate, MainFrameViewController, StreamView, Info.plist) so the app opens into
   the panel, adds the host on Play, pairs and launches Desktop in the app.
 - `integrate-moonlight.rb` applies the patch to `moonlight-ios/` (a checkout of moonlight-stream/moonlight-ios, ignored by git),
