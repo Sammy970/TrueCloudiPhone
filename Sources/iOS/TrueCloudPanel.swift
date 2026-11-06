@@ -156,14 +156,14 @@ final class TrueCloudStore: ObservableObject {
                                                          netin: running ? 1.8 * 1_073_741_824 : 0, netout: running ? 0.4 * 1_073_741_824 : 0))
             if running { session.previewTraffic(TrafficRate(downloadMBps: 1.42, uploadMBps: 0.18)) }
         }
-        // `controls` opens the on-screen controls editor; add `:selected`, `:selected:options` (Appearance card open), `:selected:removed` (two controls in the tray), `:play` (controls lit as if held) or
+        // `controls` opens the on-screen controls editor; add `:selected`, `:selected:options` (Appearance card open), `:selected:removed` (two controls in the tray), `:try` (Try it on, with the demo gamepad button), `:play` (controls lit as if held) or
         // `:bright` (day scene). `controls:selftest` runs the input-logic checks and logs the results.
         if value.hasPrefix("controls") {
             let options = Set(value.split(separator: ":").dropFirst().map(String.init))
             if options.contains("selftest") {
                 OSCSelfTest.run()
             } else {
-                let preview: OSCEditorViewController.Preview = options.contains("toggle") ? .toggle : options.contains("play") ? .playing : options.contains("options") ? .options : options.contains("removed") ? .removed : options.contains("selected") ? .selected : .none
+                let preview: OSCEditorViewController.Preview = options.contains("toggle") ? .toggle : options.contains("try") ? .trying : options.contains("play") ? .playing : options.contains("options") ? .options : options.contains("removed") ? .removed : options.contains("selected") ? .selected : .none
                 Task { @MainActor in
                     try? await Task.sleep(for: .seconds(1.5))
                     TrueCloudPanel.presentControlsEditor(preview: preview, bright: options.contains("bright"))

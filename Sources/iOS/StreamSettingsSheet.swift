@@ -191,7 +191,7 @@ struct ControlsSheet: View {
                 } header: {
                     Text("On-screen controls")
                 } footer: {
-                    Text("Auto shows the full controls when no controller is connected, and only the buttons a connected controller lacks (nothing if it has them all). Off hides them; Simple and Full always show them, Simple with fewer buttons.")
+                    Text("Auto shows the full controls when no controller is connected, and only the buttons a connected controller lacks (nothing if it has them all). Off hides them; Simple and Full always show them, Simple with fewer buttons.\n\nDuring a stream, the gamepad button at the top right turns these controls off for that stream. Your saved settings don't change.")
                 }
 
                 Section {

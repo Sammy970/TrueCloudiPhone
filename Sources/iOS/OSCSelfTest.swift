@@ -145,6 +145,24 @@ enum OSCSelfTest {
         _ = c.pointerUp(68)
         c.setFloatingSticks(false)
 
+        // Editor "Try it" demo button: shown only while trying, and tapping it changes nothing
+        var demoTaps = 0
+        c.onDemoToggleTap = { demoTaps += 1 }
+        c.setEditing(true)
+        check("Demo button: hidden while arranging", !c.isToggleButtonShown)
+        c.isTrying = true
+        check("Demo button: not live in a plain view", c.gamepadEnabled)
+        let beforeDemo = c.layout
+        c.simulateDemoToggleTap()
+        check("Demo tap: controls stay on and the callback ran", c.gamepadEnabled && demoTaps == 1)
+        check("Demo tap: buttons still work", c.pointerDown(70, at: at(.a)) && out.flags & OSCFlag.a != 0)
+        _ = c.pointerUp(70)
+        check("Demo tap: settings and layout untouched", c.layout == beforeDemo && OSCLayoutStore.load() == beforeDemo)
+        c.isTrying = false
+        check("Demo button: hidden again when Try it is off", !c.isToggleButtonShown)
+        c.setEditing(false)
+        check("Demo button: hidden after closing", !c.isToggleButtonShown && c.gamepadEnabled)
+
         // Fade after idle
         c.setFadeAfter(5)
         check("Fade: not faded to begin with", !c.isFaded)

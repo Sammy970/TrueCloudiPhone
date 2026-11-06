@@ -13,6 +13,18 @@ final class GamepadToggleWindow {
     private var watchdog: Timer?
     private let onToggle: (Bool) -> Void
 
+    /// Demo mode (the controls editor's "Try it"): the button only shows where it lives. Tapping it explains itself in a toast
+    /// and changes nothing: the icon stays on and `onToggle` is never called.
+    var isDemo: Bool {
+        get { model.isDemo }
+        set { model.isDemo = newValue; if newValue { model.isOn = true } }
+    }
+    /// Called after a tap in demo mode (for the self-test).
+    var onDemoTap: (() -> Void)? {
+        get { model.onDemoTap }
+        set { model.onDemoTap = newValue }
+    }
+
     init(scene: UIWindowScene, ownerView: UIView?, onToggle: @escaping (Bool) -> Void) {
         self.ownerView = ownerView
         self.onToggle = onToggle
@@ -51,19 +63,30 @@ final class GamepadToggleWindow {
     func setOn(_ on: Bool) { model.isOn = on }
 
     func hide() { setShown(false) }
+
+    /// What a tap does in demo mode, for the self-test.
+    func simulateDemoTap() { model.demoTap() }
 }
 
 @MainActor
 private final class GamepadToggleModel: ObservableObject {
     @Published var isOn = true
     @Published var toast: String?
+    @Published var isDemo = false
+    var onDemoTap: (() -> Void)?
     private var toastTask: Task<Void, Never>?
 
-    func flash(_ text: String) {
+    func demoTap() {
+        isOn = true
+        flash("In a stream, this turns the on-screen controls off so you can use the mouse.", seconds: 2.8)
+        onDemoTap?()
+    }
+
+    func flash(_ text: String, seconds: Double = 1.5) {
         toast = text
         toastTask?.cancel()
         toastTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.5))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             self?.toast = nil
         }
@@ -99,12 +122,15 @@ private struct GamepadToggleRoot: View {
                     .font(.footnote.weight(.semibold))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 280, alignment: .trailing)
                     .glassCapsule()
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .padding(.top, 8)
-        .padding(.trailing, 12)
+        // In the editor's demo the Appearance button owns the top corner, so the demo button sits just to its left.
+        .padding(.top, model.isDemo ? 6 : 8)
+        .padding(.trailing, model.isDemo ? 66 : 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: model.toast)
         .sensoryFeedback(.impact(weight: .light), trigger: model.isOn)
@@ -115,7 +141,7 @@ private struct GamepadToggleRoot: View {
         ZStack {
             Image(systemName: model.isOn ? "gamecontroller.fill" : "gamecontroller")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(model.isOn ? Color.accentColor : Color.secondary)
+                .foregroundStyle(model.isOn ? Color(OSCGlass.blue) : Color.secondary)
             if !model.isOn {
                 Capsule()
                     .fill(Color(red: 0.95, green: 0.36, blue: 0.36))
@@ -124,11 +150,16 @@ private struct GamepadToggleRoot: View {
             }
         }
         .frame(width: 40, height: 40)
-        .glassCapsule(tint: model.isOn ? Color.accentColor.opacity(0.18) : nil)
+        .glassCapsule(tint: model.isOn ? Color(OSCGlass.blue).opacity(0.18) : nil)
         .contentShape(Circle())
     }
 
     private func toggle() {
+        if model.isDemo {
+            model.demoTap()
+            scheduleDim()
+            return
+        }
         model.isOn.toggle()
         model.flash(model.isOn ? "On-screen controls on" : "On-screen controls off")
         onToggle(model.isOn)

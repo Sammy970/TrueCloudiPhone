@@ -603,7 +603,7 @@ private final class OSCCanvasView: UIView {
 @MainActor
 final class OSCEditorViewController: UIViewController {
     /// What the editor opens showing; used for screenshots.
-    enum Preview { case none, selected, playing, options, removed, toggle }
+    enum Preview { case none, selected, playing, options, removed, toggle, trying }
 
     private let canvas = OSCCanvasView()
     private let backdrop = OSCBackdropView()
@@ -689,6 +689,8 @@ final class OSCEditorViewController: UIViewController {
             controls.isTrying = true
             controls.setFloatingSticks(true)
             controls.installGamepadToggle(force: true)
+        case .trying:
+            controls.isTrying = true
         case .playing:
             // Hold a few controls down so the lit glass shows.
             controls.isTrying = true

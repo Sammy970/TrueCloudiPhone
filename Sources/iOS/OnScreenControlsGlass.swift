@@ -252,13 +252,30 @@ final class TrueCloudOnScreenControls: NSObject {
     /// Adds the toggle button over the stream (once). It stays hidden when the saved level is Off (nothing to toggle).
     func installGamepadToggle(force: Bool = false) {
         forceToggleButton = force
-        if toggleWindow == nil {
-            guard let scene = view?.window?.windowScene
-                ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
-            toggleWindow = GamepadToggleWindow(scene: scene, ownerView: view) { [weak self] on in self?.setGamepadEnabled(on) }
-        }
+        ensureToggleWindow()
         refreshToggleButton()
     }
+
+    private func ensureToggleWindow() {
+        guard toggleWindow == nil else { return }
+        guard let scene = view?.window?.windowScene
+            ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        toggleWindow = GamepadToggleWindow(scene: scene, ownerView: view) { [weak self] on in self?.setGamepadEnabled(on) }
+    }
+
+    /// The standalone editor's "Try it" shows the button as a demo only (it never turns the controls off). The real stream and the
+    /// fake-stream preview (`forceToggleButton`) use the live button.
+    private var isDemoToggle: Bool {
+        isEditing && !forceToggleButton && String(describing: type(of: view)) != "StreamView"
+    }
+
+    /// Tap on the demo button, for the self-test.
+    var onDemoToggleTap: (() -> Void)? {
+        didSet { toggleWindow?.onDemoTap = onDemoToggleTap }
+    }
+    /// Self-test only: runs the demo tap path when a window exists (the self-test runs too early to open one).
+    func simulateDemoToggleTap() { toggleWindow?.simulateDemoTap(); if toggleWindow == nil { onDemoToggleTap?() } }
+    var isToggleButtonShown: Bool { toggleWindow?.isShown ?? false }
 
     /// The level the player saved in Controls settings (Auto may hide the layer for a physical controller, but a saved Off means no gamepad at all).
     private var savedLevelIsOff: Bool {
@@ -267,7 +284,12 @@ final class TrueCloudOnScreenControls: NSObject {
     }
 
     private func refreshToggleButton() {
-        toggleWindow?.setShown(visible && !isArranging && (forceToggleButton || !savedLevelIsOff))
+        if isDemoToggle, isTrying, view?.window != nil { ensureToggleWindow() }
+        guard let toggleWindow else { return }
+        let demo = isDemoToggle
+        toggleWindow.isDemo = demo
+        toggleWindow.onDemoTap = onDemoToggleTap
+        toggleWindow.setShown(visible && !isArranging && (forceToggleButton || !savedLevelIsOff))
     }
 
     /// Turns the on-screen gamepad off or on for this stream. Off releases everything that is held (the host sees a neutral pad),
