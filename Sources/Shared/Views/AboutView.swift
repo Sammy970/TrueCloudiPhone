@@ -7,6 +7,7 @@ struct AboutView: View {
     var body: some View {
         VStack(spacing: 22) {
             header.reveal(0)
+            discordCard.reveal(0.04)
             makerCard.reveal(0.08)
             projectCard.reveal(0.16)
             Text("Independent prototype, shown to TrueCloud with their permission. Not an official release.\n\"TrueCloud\" belongs to its owners; this app's icon is its own drawing.")
@@ -43,6 +44,39 @@ struct AboutView: View {
                 .padding(.vertical, 5)
                 .glassCapsule(tint: Color.tcAccent.opacity(0.15))
         }
+    }
+
+    // MARK: Discord
+
+    private static let discordBlurple = Color(red: 0x58 / 255, green: 0x65 / 255, blue: 0xF2 / 255)
+
+    private var discordCard: some View {
+        Button { openURL(Config.discordInvite) } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(Self.discordBlurple.gradient, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Join our Discord").font(.subheadline.weight(.semibold))
+                    Text("Questions, bugs or ideas? Come and chat.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.right").font(.caption.weight(.semibold)).foregroundStyle(Self.discordBlurple)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .glassSurface(cornerRadius: 20)
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Self.discordBlurple.opacity(0.45), lineWidth: 1))
+        .help(Config.discordInvite.absoluteString)
+        .accessibilityLabel("Join our Discord")
     }
 
     // MARK: Maker
