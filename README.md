@@ -151,6 +151,9 @@ does the streaming underneath; you never see its host list or settings.
 - **In-stream overlay:** a small pill with time left and live latency. Tap it for the full card, or to edit the on-screen controls.
   It warns you when the connection gets busy and when plan time is running out.
 - **Glass on-screen controls** you can move, resize, remove and fade, with floating sticks that appear under your thumb (below).
+- **A gamepad button in the stream** that turns the on-screen controls off and on, so you can move the mouse while floating sticks are on (below).
+- **Stretch to fill screen:** removes the black bars at the sides. The picture looks a little wider than it is.
+- **A Logs screen** (the "…" menu) to see what the app has been doing, and to share it in a bug report.
 - **Liquid Glass on iOS 26,** with a frosted fallback on earlier versions, in light and dark.
 
 Google sign-in, which the website also offers, isn't supported. Use "Forgot password?" on the website once to add a password to a Google-created account.
@@ -219,6 +222,28 @@ way: a small pill at the top, the controls themselves in the clear, and a faint 
   <img src=".github/screenshots/controls-try.png" width="100%" alt="Glass controls lit up in teal as if held: A, RB, the right D-pad arrow and the left stick">
   <br><sub>Pressed controls light up in teal.</sub>
 </p>
+
+### Turn the gamepad off during a stream
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src=".github/screenshots/gamepad-button-on.png" width="100%" alt="The stream with the on-screen controls showing and the gamepad button lit at the top right"><br><sub>Controls on.</sub></td>
+    <td width="50%" valign="top"><img src=".github/screenshots/gamepad-button-off.png" width="100%" alt="The stream with the on-screen controls hidden and the gamepad button crossed out, with the note On-screen controls off"><br><sub>Controls off: your touches move the mouse.</sub></td>
+  </tr>
+</table>
+
+A small round button at the top right of the stream turns the on-screen controls off and on for that stream. With floating sticks on, every touch becomes a stick, so switch the controls off to move the mouse, then back on when you need them.
+
+- **Off** releases everything that is held, hides the controls and sends your touches to Moonlight's normal mouse and touch handling.
+- **On** brings the controls back exactly as you set them. Your saved settings never change, and a physical controller works either way.
+- The button shows in trackpad mode (Moonlight turns the on-screen controls off in direct touch mode) and stays hidden if the on-screen controls are set to Off.
+- In the layout editor's **Try it** mode the button is shown too, so you can see where it sits. Tapping it there only explains what it does.
+
+<p align="center">
+  <img src=".github/screenshots/gamepad-button-try-it.png" width="100%" alt="The layout editor in Try it mode: the teal gamepad button at the top right with a note saying that in a stream it turns the on-screen controls off so you can use the mouse">
+  <br><sub>The button in Try it mode.</sub>
+</p>
+
 
 ## Install with SideStore (no Xcode needed)
 
