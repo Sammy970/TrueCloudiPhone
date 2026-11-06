@@ -126,6 +126,13 @@ final class TrueCloudOnScreenControls: NSObject {
     private(set) var layout: OSCLayout
     private var visible = false
 
+    /// The in-stream "gamepad on/off" switch. Off hides the controls and lets every touch through to the stream (mouse / touch
+    /// handling). It lasts for this stream only: the controls start on, and the saved level and floating-sticks settings are never touched.
+    private(set) var gamepadEnabled = true
+    private var toggleWindow: GamepadToggleWindow?
+    /// Shows the toggle button even though the saved level can't be read or says Off (the editor preview and self-test).
+    private var forceToggleButton = false
+
     private let root = CALayer()
     private let selection = CAShapeLayer()
     private let guides = CAShapeLayer()
@@ -175,6 +182,7 @@ final class TrueCloudOnScreenControls: NSObject {
             guard isTrying != oldValue else { return }
             releaseAll()
             relayout(force: true)
+            refreshToggleButton()
             onChange?()
         }
     }
@@ -212,6 +220,8 @@ final class TrueCloudOnScreenControls: NSObject {
     }
 
     deinit {
+        let toggle = toggleWindow
+        Task { @MainActor in toggle?.hide() }
         if let editObserver { NotificationCenter.default.removeObserver(editObserver) }
         fadeTask?.cancel()
         root.removeFromSuperlayer()
@@ -233,6 +243,57 @@ final class TrueCloudOnScreenControls: NSObject {
         }
         relayout(force: true)
         wake()
+        // Only the real stream gets the button; the editor and self-test host the controls in plain views.
+        if String(describing: type(of: view)) == "StreamView" { installGamepadToggle() }
+    }
+
+    // MARK: Gamepad on/off
+
+    /// Adds the toggle button over the stream (once). It stays hidden when the saved level is Off (nothing to toggle).
+    func installGamepadToggle(force: Bool = false) {
+        forceToggleButton = force
+        if toggleWindow == nil {
+            guard let scene = view?.window?.windowScene
+                ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+            toggleWindow = GamepadToggleWindow(scene: scene, ownerView: view) { [weak self] on in self?.setGamepadEnabled(on) }
+        }
+        refreshToggleButton()
+    }
+
+    /// The level the player saved in Controls settings (Auto may hide the layer for a physical controller, but a saved Off means no gamepad at all).
+    private var savedLevelIsOff: Bool {
+        guard let s = DataManager().getSettings() else { return level == .off }
+        return s.onscreenControls.intValue == 0 || s.absoluteTouchMode
+    }
+
+    private func refreshToggleButton() {
+        toggleWindow?.setShown(visible && !isArranging && (forceToggleButton || !savedLevelIsOff))
+    }
+
+    /// Turns the on-screen gamepad off or on for this stream. Off releases everything that is held (the host sees a neutral pad),
+    /// hides the layer and stops claiming touches, so they reach the stream's mouse and touch handling. On brings the layer back
+    /// exactly as the saved level and floating-sticks settings dictate.
+    func setGamepadEnabled(_ on: Bool) {
+        toggleWindow?.setOn(on)
+        guard on != gamepadEnabled else { return }
+        gamepadEnabled = on
+        if on {
+            root.isHidden = false
+            relayout(force: true)
+            wake()
+        } else {
+            releaseAll()
+            for part in clickToggled {  // L3 / R3 latch until tapped again
+                output?.release(part == .ls ? OSCFlag.ls : OSCFlag.rs)
+                setPressed(part, false)
+            }
+            clickToggled.removeAll()
+            output?.leftStick(x: 0, y: 0); output?.rightStick(x: 0, y: 0)
+            output?.leftTrigger(0); output?.rightTrigger(0)
+            output?.commit()
+            fadeTask?.cancel(); fadeTask = nil
+            root.isHidden = true
+        }
     }
 
     @objc(setLevel:)
@@ -460,6 +521,7 @@ final class TrueCloudOnScreenControls: NSObject {
     @objc(handleTouchDownEvent:)
     func handleTouchDownEvent(_ touches: Set<UITouch>) -> Bool {
         // Any touch, consumed or not, brings a faded gamepad back (after it's been processed, so `holds` is current).
+        guard gamepadEnabled else { return false }  // off: the stream's mouse/touch handling gets every touch
         defer { wake() }
         guard let view else { return false }
         relayout()
@@ -492,7 +554,7 @@ final class TrueCloudOnScreenControls: NSObject {
     /// Returns whether the controls used the touch (so it isn't also sent to the stream as a mouse or touch).
     func pointerDown(_ id: Int, at p: CGPoint) -> Bool {
         if isEditing && !isTrying { return editDown(id, at: p) }
-        guard visible else { return false }
+        guard visible, gamepadEnabled else { return false }
         if let part = hit(p) {
             switch part {
             case .up, .down, .left, .right:
@@ -759,7 +821,7 @@ final class TrueCloudOnScreenControls: NSObject {
 
     func setEditing(_ on: Bool) {
         guard on != isEditing else { return }
-        if on { releaseAll() }
+        if on { releaseAll(); setGamepadEnabled(true) }  // arranging needs the controls on
         isEditing = on
         if !on {
             selected = nil
@@ -767,6 +829,7 @@ final class TrueCloudOnScreenControls: NSObject {
             guides.path = nil
         }
         relayout(force: true)
+        refreshToggleButton()
         onChange?()
     }
 

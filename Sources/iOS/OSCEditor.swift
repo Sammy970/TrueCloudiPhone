@@ -603,7 +603,7 @@ private final class OSCCanvasView: UIView {
 @MainActor
 final class OSCEditorViewController: UIViewController {
     /// What the editor opens showing; used for screenshots.
-    enum Preview { case none, selected, playing, options, removed }
+    enum Preview { case none, selected, playing, options, removed, toggle }
 
     private let canvas = OSCCanvasView()
     private let backdrop = OSCBackdropView()
@@ -644,7 +644,7 @@ final class OSCEditorViewController: UIViewController {
         canvas.onMove = { [weak self] touches in _ = self?.controls.handleTouchMovedEvent(touches) }
         canvas.onUp = { [weak self] touches in _ = self?.controls.handleTouchUpEvent(touches) }
 
-        if preview != .playing {
+        if preview != .playing && preview != .toggle {
             let panel = OSCEditorPanel(controls: controls, showsTryIt: true) { [weak self] in self?.close() }
             panel.translatesAutoresizingMaskIntoConstraints = false
             // The controls are drawn on high layers; the chrome has to sit above them so the bin shows under a dragged control.
@@ -684,6 +684,11 @@ final class OSCEditorViewController: UIViewController {
                 if !controls.layout.item(element).hidden { controls.toggleSelectedHidden() }
             }
             controls.select(.face)
+        case .toggle:
+            // The in-stream gamepad switch over a fake stream: controls live (not arranging), floating sticks on.
+            controls.isTrying = true
+            controls.setFloatingSticks(true)
+            controls.installGamepadToggle(force: true)
         case .playing:
             // Hold a few controls down so the lit glass shows.
             controls.isTrying = true

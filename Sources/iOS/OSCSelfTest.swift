@@ -125,6 +125,26 @@ enum OSCSelfTest {
         c.setFloatingSticks(false)
         check("Floating off again: empty touch goes to the stream", !c.pointerDown(37, at: leftEmpty) && out.lx == 0)
 
+        // In-stream gamepad switch: off releases everything and hands every touch to the stream; on restores the saved setup
+        c.setFloatingSticks(true)
+        let savedFloating = c.layout.floatingSticks
+        _ = c.pointerDown(60, at: at(.a)); _ = c.pointerDown(61, at: at(.lt)); _ = c.pointerDown(62, at: at(.ls))
+        _ = c.pointerDown(63, at: leftEmpty)
+        _ = c.pointerMoved(63, at: CGPoint(x: leftEmpty.x + 200, y: leftEmpty.y))
+        check("Gamepad switch: things are held before switching off", out.flags & OSCFlag.a != 0 && out.lt == 255 && out.flags & OSCFlag.ls != 0 && out.lx > 0x6000)
+        c.setGamepadEnabled(false)
+        check("Gamepad switch off: buttons, triggers, L3 and sticks are all released", out.flags == 0 && out.lt == 0 && out.rt == 0 && out.lx == 0 && out.ly == 0 && !c.hasFloatingStick(left: true))
+        check("Gamepad switch off: a touch on a button is left to the stream", !c.pointerDown(64, at: at(.a)) && out.flags == 0)
+        check("Gamepad switch off: an empty touch spawns no floating stick", !c.pointerDown(65, at: leftEmpty) && !c.pointerDown(66, at: rightEmpty) && !c.hasFloatingStick(left: true) && !c.hasFloatingStick(left: false))
+        check("Gamepad switch off: touch events are not consumed", !c.handleTouchDownEvent([]) && !c.handleTouchMovedEvent([]) && !c.handleTouchUpEvent([]))
+        check("Gamepad switch off: the saved settings are untouched", c.layout.floatingSticks == savedFloating && c.level == .full && OSCLayoutStore.load().floatingSticks == savedFloating)
+        c.setGamepadEnabled(true)
+        check("Gamepad switch on: floating sticks work again", c.pointerDown(67, at: leftEmpty) && c.hasFloatingStick(left: true))
+        _ = c.pointerUp(67)
+        check("Gamepad switch on: buttons work again", c.pointerDown(68, at: at(.a)) && out.flags & OSCFlag.a != 0)
+        _ = c.pointerUp(68)
+        c.setFloatingSticks(false)
+
         // Fade after idle
         c.setFadeAfter(5)
         check("Fade: not faded to begin with", !c.isFaded)

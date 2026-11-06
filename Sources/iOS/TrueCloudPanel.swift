@@ -163,7 +163,7 @@ final class TrueCloudStore: ObservableObject {
             if options.contains("selftest") {
                 OSCSelfTest.run()
             } else {
-                let preview: OSCEditorViewController.Preview = options.contains("play") ? .playing : options.contains("options") ? .options : options.contains("removed") ? .removed : options.contains("selected") ? .selected : .none
+                let preview: OSCEditorViewController.Preview = options.contains("toggle") ? .toggle : options.contains("play") ? .playing : options.contains("options") ? .options : options.contains("removed") ? .removed : options.contains("selected") ? .selected : .none
                 Task { @MainActor in
                     try? await Task.sleep(for: .seconds(1.5))
                     TrueCloudPanel.presentControlsEditor(preview: preview, bright: options.contains("bright"))
