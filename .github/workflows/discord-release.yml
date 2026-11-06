@@ -16,6 +16,7 @@ jobs:
           EMOJI: "📱"
           APP: "TrueCloud for iPhone"
           COLOR: 1357987
+          PING: "@everyone"
           FOOTER: "Unofficial client · not affiliated with TrueCloud"
           TAG: ${{ github.event.release.tag_name }}
           URL: ${{ github.event.release.html_url }}
@@ -29,6 +30,8 @@ jobs:
           ($body | clean | trunc) as $notes
           | {
               username: "Release Announcer",
+              content: ($ping + " **" + $app + " " + $tag + "** is out"),
+              allowed_mentions: { parse: ["everyone"] },
               embeds: [{
                 title: ($emoji + " " + $app + " · " + $tag),
                 url: $url,
@@ -40,5 +43,5 @@ jobs:
             }
           JQ
           jq -n --arg body "$BODY" --arg emoji "$EMOJI" --arg app "$APP" --arg tag "$TAG" --arg url "$URL" \
-            --argjson color "$COLOR" --arg time "$PUBLISHED" --arg footer "$FOOTER" -f "${RUNNER_TEMP:-/tmp}/embed.jq" \
+            --argjson color "$COLOR" --arg time "$PUBLISHED" --arg footer "$FOOTER" --arg ping "$PING" -f "${RUNNER_TEMP:-/tmp}/embed.jq" \
             | curl -sS -f -H "Content-Type: application/json" -d @- "$WEBHOOK"
