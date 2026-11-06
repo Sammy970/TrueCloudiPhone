@@ -54,7 +54,7 @@ index 5db73f5..f06a90b 100644
  #if !TARGET_OS_TV
      UIApplicationShortcutItem* shortcut = [launchOptions valueForKey:UIApplicationLaunchOptionsShortcutItemKey];
 diff --git a/Limelight/Input/StreamView.m b/Limelight/Input/StreamView.m
-index 7dedeb3..3e407d9 100644
+index 7dedeb3..ed888af 100644
 --- a/Limelight/Input/StreamView.m
 +++ b/Limelight/Input/StreamView.m
 @@ -74,7 +74,10 @@ - (void) setupStreamView:(ControllerSupport*)controllerSupport
@@ -80,7 +80,17 @@ index 7dedeb3..3e407d9 100644
      if (self.bounds.size.width > self.bounds.size.height * streamAspectRatio) {
          return CGSizeMake(self.bounds.size.height * streamAspectRatio, self.bounds.size.height);
      } else {
-@@ -672,6 +679,9 @@ - (UIPointerRegion *)pointerInteraction:(UIPointerInteraction *)interaction
+@@ -615,6 +622,9 @@ - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
+ }
+ 
+ - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
++    // TrueCloud: a cancelled touch (iOS took it for a system gesture) must let go of the on-screen controls too, or a
++    // stick or button stays held and a floating stick keeps swallowing the touches that follow.
++    [onScreenControls handleTouchUpEvent:touches];
+     [touchHandler touchesCancelled:touches withEvent:event];
+     [self handleMouseButtonEvent:BUTTON_ACTION_RELEASE
+                       forTouches:touches
+@@ -672,6 +682,9 @@ - (UIPointerRegion *)pointerInteraction:(UIPointerInteraction *)interaction
      } else {
          videoSize = CGSizeMake(self.bounds.size.width, self.bounds.size.width / streamAspectRatio);
      }

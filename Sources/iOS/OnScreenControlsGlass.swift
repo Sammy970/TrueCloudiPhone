@@ -546,9 +546,16 @@ final class TrueCloudOnScreenControls: NSObject {
         guard gamepadEnabled else { return false }  // off: the stream's mouse/touch handling gets every touch
         defer { wake() }
         guard let view else { return false }
+        releaseFinishedTouches()
         relayout()
         var consumed = false
-        for touch in touches where pointerDown(Self.id(touch), at: touch.location(in: view)) { consumed = true }
+        for touch in touches {
+            let id = Self.id(touch)
+            if beginTouch(id, at: touch.location(in: view)) {
+                consumed = true
+                touchRefs[id] = WeakTouch(touch)
+            }
+        }
         return consumed
     }
 
@@ -556,6 +563,7 @@ final class TrueCloudOnScreenControls: NSObject {
     func handleTouchMovedEvent(_ touches: Set<UITouch>) -> Bool {
         defer { wake(rearm: false) }  // moves arrive at display rate; only note the time
         guard let view else { return false }
+        releaseFinishedTouches()
         var consumed = false
         for touch in touches where pointerMoved(Self.id(touch), at: touch.location(in: view)) { consumed = true }
         return consumed
@@ -570,6 +578,36 @@ final class TrueCloudOnScreenControls: NSObject {
     }
 
     private static func id(_ touch: UITouch) -> Int { Int(bitPattern: ObjectIdentifier(touch)) }
+
+    /// The touch object behind a held finger, kept weakly, so a finger whose end never reached us can be noticed.
+    private final class WeakTouch {
+        weak var touch: UITouch?
+        init(_ touch: UITouch) { self.touch = touch }
+    }
+    private var touchRefs: [Int: WeakTouch] = [:]
+
+    /// A finger going down. UIKit reuses its touch objects, so an id that is still held belongs to a finger whose
+    /// end was never delivered (iOS cancelled it for a system gesture): let go of that one first, so a stick or
+    /// button can't stay stuck and a floating stick can't keep swallowing the touches that follow.
+    func beginTouch(_ id: Int, at p: CGPoint) -> Bool {
+        if let stale = holds[id] {
+            _ = pointerUp(id)
+            // This isn't a quick second touch, so it must not count as the double-tap that clicks the stick.
+            if case .stick(let left) = stale { lastStickRelease[left] = nil }
+        }
+        return pointerDown(id, at: p)
+    }
+
+    /// Lets go of every held finger that has ended or been cancelled without us hearing about it.
+    private func releaseFinishedTouches() {
+        guard !touchRefs.isEmpty else { return }
+        for (id, ref) in touchRefs {
+            guard holds[id] != nil else { touchRefs[id] = nil; continue }
+            if let touch = ref.touch, touch.phase != .ended, touch.phase != .cancelled { continue }
+            Log.info("[osc] a finger ended without a touch-up; releasing its control")
+            _ = pointerUp(id)
+        }
+    }
 
     // MARK: Pointer logic
 
@@ -694,6 +732,7 @@ final class TrueCloudOnScreenControls: NSObject {
     }
 
     func pointerUp(_ id: Int) -> Bool {
+        touchRefs[id] = nil
         guard let hold = holds.removeValue(forKey: id) else { return false }
         switch hold {
         case .drag(let element, _):

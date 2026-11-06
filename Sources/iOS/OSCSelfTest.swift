@@ -114,6 +114,17 @@ enum OSCSelfTest {
         check("Floating: lifting zeroes the right stick and removes it", out.rx == 0 && out.ry == 0 && !c.hasFloatingStick(left: false) && c.hasFloatingStick(left: true))
         _ = c.pointerUp(31)
         check("Floating: lifting zeroes the left stick and removes it", out.lx == 0 && out.ly == 0 && !c.hasFloatingStick(left: true))
+        // A finger whose end never arrived (iOS cancelled it): its touch id coming back lets go of the old stick first,
+        // so the side isn't left swallowing every later touch.
+        check("Floating: a finger down on the left", c.beginTouch(60, at: leftEmpty) && c.hasFloatingStick(left: true))
+        _ = c.pointerMoved(60, at: CGPoint(x: leftEmpty.x + 200, y: leftEmpty.y))
+        check("Floating: the stuck finger drives the stick", out.lx > 0x6000)
+        check("Floating: the same touch id coming back (its end was lost) releases the old stick and starts a new one",
+              c.beginTouch(60, at: leftEmpty) && out.lx == 0 && c.hasFloatingStick(left: true))
+        _ = c.pointerUp(60)
+        check("Floating: after that the side is free again, not stuck",
+              !c.hasFloatingStick(left: true) && c.beginTouch(61, at: leftEmpty) && c.hasFloatingStick(left: true) && out.lx == 0)
+        _ = c.pointerUp(61)
         check("Floating: a fixed control still wins and spawns nothing",
               c.pointerDown(34, at: at(.a)) && out.flags & OSCFlag.a != 0 && !c.hasFloatingStick(left: false) && !c.hasFloatingStick(left: true))
         _ = c.pointerUp(34)
