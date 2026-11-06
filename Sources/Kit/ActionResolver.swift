@@ -8,9 +8,15 @@ public actor ActionResolver {
     private var ids: [String: String]
     private var resolvedLive = false
 
-    public init(transport: HTTPTransport = URLSessionTransport(), fallback: [String: String] = TCConstants.fallbackActionIDs) {
+    /// Reads the live ids some other way (the app's web bridge). When set, `refresh()` uses it instead of HTTP.
+    public typealias Source = @Sendable (_ force: Bool) async throws -> [String: String]
+    private let source: Source?
+
+    public init(transport: HTTPTransport = URLSessionTransport(), fallback: [String: String] = TCConstants.fallbackActionIDs,
+                source: Source? = nil) {
         self.transport = transport
         self.ids = fallback
+        self.source = source
     }
 
     public func id(for action: String) throws -> String {
@@ -23,7 +29,14 @@ public actor ActionResolver {
 
     /// Reads the rig page and its chunks and updates the ids. Returns the names it found.
     @discardableResult
-    public func refresh() async throws -> [String: String] {
+    public func refresh(force: Bool = true) async throws -> [String: String] {
+        if let source {
+            let found = try await source(force)
+            guard !found.isEmpty else { throw TCError.actionsUnavailable }
+            ids.merge(found) { _, new in new }
+            resolvedLive = true
+            return found
+        }
         let page = try await fetchText(TCConstants.rigPageURL)
         let chunks = Self.chunkURLs(inHTML: page)
         guard !chunks.isEmpty else { throw TCError.actionsUnavailable }
@@ -78,6 +91,7 @@ public actor ActionResolver {
         request.timeoutInterval = 30
         request.setValue("Mozilla/5.0 (Macintosh) TrueCloudMac", forHTTPHeaderField: "User-Agent")
         let (data, status) = try await transport.send(request)
+        if let blocked = TCError.blockedClient(status: status, body: data) { throw blocked }
         guard (200..<300).contains(status) else { throw TCError.http(status) }
         return String(decoding: data, as: UTF8.self)
     }

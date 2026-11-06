@@ -54,7 +54,7 @@ index 5db73f5..f06a90b 100644
  #if !TARGET_OS_TV
      UIApplicationShortcutItem* shortcut = [launchOptions valueForKey:UIApplicationLaunchOptionsShortcutItemKey];
 diff --git a/Limelight/Input/StreamView.m b/Limelight/Input/StreamView.m
-index 7dedeb3..1d832c4 100644
+index 7dedeb3..3e407d9 100644
 --- a/Limelight/Input/StreamView.m
 +++ b/Limelight/Input/StreamView.m
 @@ -74,7 +74,10 @@ - (void) setupStreamView:(ControllerSupport*)controllerSupport
@@ -69,6 +69,27 @@ index 7dedeb3..1d832c4 100644
      OnScreenControlsLevel level = (OnScreenControlsLevel)[settings.onscreenControls integerValue];
      if (settings.absoluteTouchMode) {
          Log(LOG_I, @"On-screen controls disabled in absolute touch mode");
+@@ -177,6 +180,10 @@ - (OnScreenControlsLevel) getCurrentOscState {
+ }
+ 
+ - (CGSize) getVideoAreaSize {
++    // TrueCloud: with "Stretch to fill" the video covers the whole view, so touches map across all of it.
++    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"TrueCloudStretchToFill"]) {
++        return self.bounds.size;
++    }
+     if (self.bounds.size.width > self.bounds.size.height * streamAspectRatio) {
+         return CGSizeMake(self.bounds.size.height * streamAspectRatio, self.bounds.size.height);
+     } else {
+@@ -672,6 +679,9 @@ - (UIPointerRegion *)pointerInteraction:(UIPointerInteraction *)interaction
+     } else {
+         videoSize = CGSizeMake(self.bounds.size.width, self.bounds.size.width / streamAspectRatio);
+     }
++    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"TrueCloudStretchToFill"]) {
++        videoSize = self.bounds.size;   // TrueCloud: stretched video covers the whole view
++    }
+     videoOrigin = CGPointMake(self.bounds.size.width / 2 - videoSize.width / 2,
+                               self.bounds.size.height / 2 - videoSize.height / 2);
+     
 diff --git a/Limelight/Limelight-Info.plist b/Limelight/Limelight-Info.plist
 index 963c433..4167d08 100644
 --- a/Limelight/Limelight-Info.plist
@@ -156,6 +177,21 @@ index 963c433..4167d08 100644
  	</array>
  	<key>UIViewControllerBasedStatusBarAppearance</key>
  	<false/>
+diff --git a/Limelight/Stream/VideoDecoderRenderer.m b/Limelight/Stream/VideoDecoderRenderer.m
+index 5c89e5a..0e8c7ce 100644
+--- a/Limelight/Stream/VideoDecoderRenderer.m
++++ b/Limelight/Stream/VideoDecoderRenderer.m
+@@ -55,6 +55,10 @@ - (void)reinitializeDisplayLayer
+     } else {
+         videoSize = CGSizeMake(_view.bounds.size.width, _view.bounds.size.width / _streamAspectRatio);
+     }
++    // TrueCloud: "Stretch to fill" fills the whole screen (no black bars), distorting the picture to fit.
++    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"TrueCloudStretchToFill"]) {
++        videoSize = _view.bounds.size;
++    }
+     displayLayer.position = CGPointMake(CGRectGetMidX(_view.bounds), CGRectGetMidY(_view.bounds));
+     displayLayer.bounds = CGRectMake(0, 0, videoSize.width, videoSize.height);
+     displayLayer.videoGravity = AVLayerVideoGravityResize;
 diff --git a/Limelight/ViewControllers/MainFrameViewController.m b/Limelight/ViewControllers/MainFrameViewController.m
 index 169bb13..885df6e 100644
 --- a/Limelight/ViewControllers/MainFrameViewController.m

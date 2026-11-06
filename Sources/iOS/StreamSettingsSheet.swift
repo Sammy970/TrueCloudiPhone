@@ -11,6 +11,10 @@ struct MoonlightPrefs: Equatable {
     var onscreenControls = 1
     var statsOverlay = false
     var audioOnPC = false
+    /// Fill the whole screen, stretching the picture (no black bars). Read by Moonlight's video and touch code.
+    var stretchToFill = false
+
+    static let stretchKey = "TrueCloudStretchToFill"
 
     static let heights = [720, 1080, 1440, 2160]
     static let bitrates = [5000, 10000, 15000, 20000, 30000, 40000, 50000]
@@ -31,11 +35,13 @@ struct MoonlightPrefs: Equatable {
         prefs.onscreenControls = s.onscreenControls.intValue
         prefs.statsOverlay = s.statsOverlay
         prefs.audioOnPC = s.playAudioOnPC
+        prefs.stretchToFill = UserDefaults.standard.bool(forKey: stretchKey)
         return prefs
     }
 
     /// Writes these values and keeps every other Moonlight setting as it was.
     func save() {
+        UserDefaults.standard.set(stretchToFill, forKey: Self.stretchKey)
         let data = DataManager()
         guard let s = data.getSettings() else { return }
         data.saveSettings(
@@ -94,6 +100,13 @@ struct StreamSettingsSheet: View {
                     Text("Picture")
                 } footer: {
                     Text("Streams at \(prefs.width) × \(prefs.height) and uses up to \(prefs.gigabytesPerHour) GB of data per hour. Lower the bitrate if the picture stutters.")
+                }
+
+                Section {
+                    Toggle(isOn: $prefs.stretchToFill) {
+                        Text("Stretch to fill screen")
+                        Text("Removes the black bars at the sides. The picture looks a little wider than it is.")
+                    }
                 }
 
                 Section {

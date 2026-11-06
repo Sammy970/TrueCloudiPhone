@@ -35,4 +35,20 @@ enum Log {
             }
         }
     }
+
+    /// The last `maxLines` lines of the log file, oldest first.
+    static func recentLines(_ maxLines: Int = 600) -> [String] {
+        queue.sync {
+            guard let data = try? Data(contentsOf: fileURL) else { return [] }
+            // Only the tail matters; skip the start of a big file.
+            let tail = data.count > 400_000 ? data.suffix(400_000) : data
+            let lines = String(decoding: tail, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: true)
+            return lines.suffix(maxLines).map(String.init)
+        }
+    }
+
+    /// Empties the log file.
+    static func clear() {
+        queue.sync { try? Data().write(to: fileURL) }
+    }
 }

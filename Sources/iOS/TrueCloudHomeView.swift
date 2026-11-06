@@ -48,6 +48,7 @@ struct TrueCloudHomeView: View {
     @State private var showingControllers = false
     @State private var showingActivity = false
     @State private var showingPayments = false
+    @State private var showingLogs = false
     /// Kept here so the sheets show the last list at once and refresh behind it.
     @StateObject private var activityModel = ActivityModel()
     @StateObject private var paymentsModel = PaymentsModel()
@@ -64,6 +65,9 @@ struct TrueCloudHomeView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
+                // TrueCloud blocking the app, changing its website, or a newer version of this app.
+                SiteHealthBanner(health: session.health)
+                    .padding(.bottom, 16)
                 header
                     .reveal(0)
                     .padding(.bottom, 20)
@@ -197,6 +201,9 @@ struct TrueCloudHomeView: View {
         }
         .sheet(isPresented: $showingActivity) {
             ActivitySheet(model: activityModel)
+        }
+        .sheet(isPresented: $showingLogs) {
+            LogsSheet()
         }
         .sheet(isPresented: $showingPayments) {
             PaymentsSheet(model: paymentsModel)
@@ -537,6 +544,7 @@ struct TrueCloudHomeView: View {
         if value.contains(":settings") { showingSettings = true }
         if value.hasSuffix(":network") { showingNetwork = true }
         if value.contains(":about") { showingAbout = true }
+        if value.contains(":logs") { showingLogs = true }
         if value.contains(":activity") { activityModel.preview(Self.sampleActivity); showingActivity = true }
         if value.contains(":payments") { paymentsModel.preview(Self.samplePayments); showingPayments = true }
         if value.contains(":roundtrip") {
@@ -642,6 +650,7 @@ struct TrueCloudHomeView: View {
                 if let name = auth.profile?.displayName, !name.isEmpty { Text(name) }
                 Button("Refresh Account", systemImage: "arrow.clockwise") { Task { await auth.reloadProfile() } }
                 Button("Plans & Pricing", systemImage: "creditcard") { openURL(Config.dashboardURL) }
+                Button("Logs", systemImage: "doc.text.magnifyingglass") { showingLogs = true }
                 Button("About", systemImage: "info.circle") { showingAbout = true }
                 Divider()
                 Button("Unpair All Devices", systemImage: "link.badge.plus") { confirm = .unpair }

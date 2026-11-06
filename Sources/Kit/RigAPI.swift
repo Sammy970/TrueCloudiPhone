@@ -67,9 +67,9 @@ public struct RigAPI: Sendable {
         self.resolver = resolver ?? ActionResolver(transport: transport)
     }
 
-    /// Read-only; works without signing in.
-    public func vmStatus(node: String, vmid: Int, sunshineAddress: String) async throws -> VmStatus {
-        let value = try await call("getVmStatus", args: [node, vmid, sunshineAddress])
+    /// Read-only. Needs the account's ID token since TrueCloud's 2026-11-05 update.
+    public func vmStatus(node: String, vmid: Int, sunshineAddress: String, idToken: String) async throws -> VmStatus {
+        let value = try await call("getVmStatus", args: [node, vmid, sunshineAddress, idToken])
         guard let json = value as? [String: Any] else { throw TCError.unexpectedResponse }
         return try VmStatus(json: json)
     }
@@ -94,8 +94,31 @@ public struct RigAPI: Sendable {
     public func systemControls() async -> SystemControls? {
         var request = URLRequest(url: TCConstants.siteBase.appendingPathComponent("api/system-controls"))
         request.timeoutInterval = 15
-        guard let (data, status) = try? await transport.send(request), (200..<300).contains(status) else { return nil }
+        guard let (data, status) = try? await transport.send(request) else { return nil }
+        if TCError.blockedClient(status: status, body: data) != nil { return nil }
+        guard (200..<300).contains(status) else { return nil }
         return SystemControls(json: try? JSONSerialization.jsonObject(with: data))
+    }
+
+    /// The raw admin-switch JSON, for the compatibility check.
+    public func systemControlsJSON() async throws -> Any? {
+        var request = URLRequest(url: TCConstants.siteBase.appendingPathComponent("api/system-controls"))
+        request.timeoutInterval = 15
+        let (data, status) = try await transport.send(request)
+        if let blocked = TCError.blockedClient(status: status, body: data) { throw blocked }
+        guard (200..<300).contains(status) else { throw TCError.http(status) }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    /// The cloud PC's power events (the dashboard's Activity Console), newest first.
+    public func vmLogs(vmid: Int, idToken: String) async throws -> [ActivityEntry] {
+        try ActivityEntry.parse(actionResult: try await call("getVmLogs", args: [vmid, idToken]))
+    }
+
+    /// The account's payments (the dashboard's Payment History), newest first. Lives on the history page.
+    public func transactions(idToken: String) async throws -> [PaymentRecord] {
+        try PaymentRecord.parse(actionResult: try await call("getUserTransactions", args: [idToken],
+                                                             page: TCConstants.historyPageURL))
     }
 
     /// Gives Sunshine the PIN that Moonlight's pair request is showing.
@@ -112,13 +135,14 @@ public struct RigAPI: Sendable {
 
     /// Calls a Server Action. If the id is stale (404, or an answer without an RSC result) the ids are
     /// re-read from the site and the call retried once.
-    func call(_ action: String, args: [Any]) async throws -> Any? {
+    func call(_ action: String, args: [Any], page: URL = TCConstants.rigPageURL) async throws -> Any? {
         var refreshed = false
         while true {
             let id = try await resolver.id(for: action)
-            let request = try Self.request(actionID: id, args: args)
+            let request = try Self.request(actionID: id, args: args, page: page)
             let (data, status) = try await transport.send(request)
             let text = String(decoding: data, as: UTF8.self)
+            if let blocked = TCError.blockedClient(status: status, body: data) { throw blocked }
 
             let stale = status == 404 || (status < 500 && RSC.parseResult(text) == nil && status != 401)
             if (stale || status == 400) && !refreshed {
@@ -145,14 +169,14 @@ public struct RigAPI: Sendable {
         }
     }
 
-    static func request(actionID: String, args: [Any]) throws -> URLRequest {
-        var request = URLRequest(url: TCConstants.rigPageURL)
+    static func request(actionID: String, args: [Any], page: URL = TCConstants.rigPageURL) throws -> URLRequest {
+        var request = URLRequest(url: page)
         request.httpMethod = "POST"
         request.timeoutInterval = 45
         request.setValue("text/x-component", forHTTPHeaderField: "Accept")
         request.setValue("text/plain;charset=UTF-8", forHTTPHeaderField: "Content-Type")
         request.setValue(actionID, forHTTPHeaderField: "Next-Action")
-        request.setValue(TCConstants.rigPageURL.absoluteString, forHTTPHeaderField: "Referer")
+        request.setValue(page.absoluteString, forHTTPHeaderField: "Referer")
         request.setValue("https://truecloud.in", forHTTPHeaderField: "Origin")
         request.httpBody = try JSONSerialization.data(withJSONObject: args)
         return request

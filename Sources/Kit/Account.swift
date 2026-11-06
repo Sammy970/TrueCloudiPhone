@@ -1,8 +1,10 @@
 import Foundation
 
 // What TrueCloud keeps about an account besides the rig's profile: the activity log of the cloud PC's power events
-// (`vm_logs/<vmid>-<uid>`, shown by the dashboard as its "Activity Console") and the payment history
-// (`transactions/<uid>`, the dashboard's "Payment History"). Both are Firestore documents the signed-in user can read.
+// (the dashboard's "Activity Console") and the payment history (its "Payment History").
+// Until 2026-11-05 both were Firestore documents (`vm_logs/<vmid>-<uid>`, `transactions/<uid>`) the user could read;
+// since then Firestore refuses them and the dashboard loads them with the `getVmLogs` and `getUserTransactions`
+// Server Actions, which this app now uses too. The Firestore parsers stay for tests and older data.
 
 /// One power event of the cloud PC: a start, a shutdown, a force stop, and how it went.
 public struct ActivityEntry: Equatable, Identifiable, Sendable {
@@ -33,6 +35,19 @@ public struct ActivityEntry: Equatable, Identifiable, Sendable {
             guard let map = row.map, let time = map["timestamp"]?.date else { return nil }
             return ActivityEntry(id: map["id"]?.string ?? "\(index)", type: map["type"]?.string ?? "",
                                  status: map["status"]?.string ?? "", timestamp: time)
+        }
+        return entries.sorted { $0.timestamp > $1.timestamp }
+    }
+}
+
+extension ActivityEntry {
+    /// Entries of a `getVmLogs` answer (`{"success": true, "logs": [...]}`), newest first. Client IPs are dropped.
+    public static func parse(actionResult value: Any?) throws -> [ActivityEntry] {
+        let rows = try ActionJSON.list(value, key: "logs")
+        let entries: [ActivityEntry] = rows.enumerated().compactMap { index, row in
+            guard let time = ActionJSON.date(row["timestamp"]) else { return nil }
+            return ActivityEntry(id: row["id"] as? String ?? "\(index)", type: row["type"] as? String ?? "",
+                                 status: row["status"] as? String ?? "", timestamp: time)
         }
         return entries.sorted { $0.timestamp > $1.timestamp }
     }
@@ -91,6 +106,60 @@ public struct PaymentRecord: Equatable, Identifiable, Sendable {
                 failureReason: map["failureReason"]?.string)
         }
         return records.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+    }
+}
+
+extension PaymentRecord {
+    /// Records of a `getUserTransactions` answer (`{"success": true, "transactions": [...]}`), newest first.
+    public static func parse(actionResult value: Any?) throws -> [PaymentRecord] {
+        let rows = try ActionJSON.list(value, key: "transactions")
+        let records: [PaymentRecord] = rows.enumerated().map { index, row in
+            let status: Status = switch (row["status"] as? String)?.lowercased() {
+            case "success": .success
+            case "failure": .failure
+            case "pending": .pending
+            case let other?: .other(other)
+            case nil: .other("unknown")
+            }
+            return PaymentRecord(
+                id: row["transactionId"] as? String ?? "\(index)",
+                planName: (row["planName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                amount: (row["amount"] as? NSNumber)?.intValue,
+                currency: row["currency"] as? String ?? "INR",
+                status: status,
+                isUpgrade: row["isUpgrade"] as? Bool ?? false,
+                createdAt: ActionJSON.date(row["createdAt"]),
+                failureReason: row["failureReason"] as? String)
+        }
+        return records.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+    }
+}
+
+/// Helpers for Server Action answers.
+enum ActionJSON {
+    /// The array under `key` of a `{"success": true, key: [...]}` answer.
+    static func list(_ value: Any?, key: String) throws -> [[String: Any]] {
+        guard let dict = value as? [String: Any] else { throw TCError.unexpectedResponse }
+        if dict["success"] as? Bool == false {
+            throw TCError.server((dict["message"] as? String) ?? (dict["error"] as? String) ?? "TrueCloud refused the request.")
+        }
+        if dict[key] == nil || dict[key] is NSNull { return [] }
+        guard let rows = dict[key] as? [[String: Any]] else { throw TCError.unexpectedResponse }
+        return rows
+    }
+
+    /// React Server Components send dates as "$D<ISO 8601>".
+    static func date(_ value: Any?) -> Date? {
+        guard var text = value as? String else {
+            if let ms = (value as? NSNumber)?.doubleValue { return Date(timeIntervalSince1970: ms > 1e11 ? ms / 1000 : ms) }
+            return nil
+        }
+        if text.hasPrefix("$D") { text.removeFirst(2) }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: text) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: text)
     }
 }
 

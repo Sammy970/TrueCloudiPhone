@@ -14,7 +14,8 @@ final class AuthStore: ObservableObject {
     /// Shown on the login screen after a forced sign-out ("Your session expired").
     @Published var loginNotice: String?
 
-    let rig = RigAPI()
+    /// truecloud.in only answers a browser now, so its requests go through the hidden web view.
+    let rig = WebBridge.makeRigAPI()
     private let firebase = FirebaseAuth()
     private let firestore = FirestoreClient()
     private var tokens: AuthTokens?
@@ -73,18 +74,17 @@ final class AuthStore: ObservableObject {
         }
     }
 
-    /// The cloud PC's power-event log, as TrueCloud recorded it (newest first).
+    /// The cloud PC's power-event log, as TrueCloud recorded it (newest first). Read the way the dashboard does,
+    /// since TrueCloud stopped letting accounts read it from Firestore directly.
     func activityLog() async throws -> [ActivityEntry] {
         let token = try await idToken()
-        guard let uid = tokens?.uid, let vmid = profile?.vmid else { throw TCError.sessionExpired }
-        return try await firestore.activityLog(vmid: vmid, uid: uid, idToken: token)
+        guard let vmid = profile?.vmid else { throw TCError.profileMissing }
+        return try await rig.vmLogs(vmid: vmid, idToken: token)
     }
 
     /// The account's payment history (newest first).
     func payments() async throws -> [PaymentRecord] {
-        let token = try await idToken()
-        guard let uid = tokens?.uid else { throw TCError.sessionExpired }
-        return try await firestore.payments(uid: uid, idToken: token)
+        try await rig.transactions(idToken: try await idToken())
     }
 
     func logout() { signOut(notice: nil) }

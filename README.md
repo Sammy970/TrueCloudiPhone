@@ -288,7 +288,7 @@ Sign in ──▶ Start Cloud PC ──▶ boot ──▶ Sunshine answers ─�
 - `Sources/Kit` is `TrueCloudKit` (Firebase sign-in, Firestore profile, the activity log and payments, network speeds, the Server Action resolver and the rig API), shared with the Mac app.
 - `Sources/Shared` holds the session, sign-in and views shared with the Mac app. `Sources/iOS` is the iPhone panel, the glass on-screen
   controls and their editor, the controller check, the stream settings and the Activity and Payments sheets.
-- `moonlight-objc.patch` hooks Moonlight's Objective-C (AppDelegate, MainFrameViewController, StreamView, Info.plist) so the app opens into
+- `moonlight-objc.patch` hooks Moonlight's Objective-C (AppDelegate, MainFrameViewController, StreamView, VideoDecoderRenderer, Info.plist) so the app opens into
   the panel, adds the host on Play, pairs and launches Desktop in the app.
 - `integrate-moonlight.rb` applies the patch to `moonlight-ios/` (a checkout of moonlight-stream/moonlight-ios, ignored by git),
   adds all Swift sources to the Moonlight target and installs the icon and launch assets.

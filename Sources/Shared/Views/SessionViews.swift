@@ -17,7 +17,6 @@ struct DisplayHero: View {
     @State private var lastPhase: SessionService.Phase?
     @State private var flashScale: CGFloat = 0.02
     @State private var flashOpacity: Double = 0
-    @State private var breathe = false
 
     private var isLit: Bool { phase == .ready || phase == .pairing }
 
@@ -147,13 +146,7 @@ struct DisplayHero: View {
                 .font(.system(size: 54, weight: .regular))
                 .symbolRenderingMode(.palette)
                 .foregroundStyle(Color.tcAccentDeep, .white)
-                .shadow(color: .white.opacity(breathe ? 0.45 : 0.1), radius: breathe ? 16 : 6)
-                .scaleEffect(breathe ? 1.06 : 1)
-                .onAppear {
-                    guard !reduceMotion else { return }
-                    withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { breathe = true }
-                }
-                .onDisappear { breathe = false }
+                .background(BreathingGlow().frame(width: 110, height: 110))
         case .pairing:
             ZStack {
                 ScanBand()
@@ -175,36 +168,6 @@ struct DisplayHero: View {
                     .foregroundStyle(.white.opacity(0.6))
             }
         }
-    }
-}
-
-/// A soft band of brand light sweeping down the screen while the PC is working.
-private struct ScanBand: View {
-    var body: some View {
-        TimelineView(.animation) { context in
-            let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.4) / 2.4
-            GeometryReader { geo in
-                LinearGradient(colors: [.clear, Color.tcAccent.opacity(0.35), .clear], startPoint: .top, endPoint: .bottom)
-                    .frame(height: geo.size.height * 0.45)
-                    .offset(y: geo.size.height * (t * 1.45 - 0.45))
-            }
-        }
-        .allowsHitTesting(false)
-    }
-}
-
-struct PulsingDot: View {
-    let color: Color
-    @State private var on = false
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 7, height: 7)
-            .background(Circle().fill(color.opacity(0.4)).scaleEffect(on ? 2.4 : 1).opacity(on ? 0 : 1))
-            .onAppear {
-                withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { on = true }
-            }
     }
 }
 
